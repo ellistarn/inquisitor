@@ -1,57 +1,135 @@
 # Inquisitor
 
-A static analysis tool for Go codebases. Analyzes the AST, computes classical software engineering
-metrics, and produces a **findings report** — each finding states what was measured, what it
-implies, and which code it applies to.
+A static analysis tool for Go codebases. Computes software engineering metrics and produces a
+self-contained report showing where complexity lives. The skill (`SKILL.md`) uses this report to
+defend the project — finding missing implementations, extra implementations, and poor architecture
+by comparing where complexity IS against where designs say it SHOULD be.
 
 ```
 inquisitor ./path/to/packages/...
 ```
 
-Inquisitor is the Inspect step of **Inspect-Audit-Simplify (IAS)** — a loop that converges on the
-simplest implementation that satisfies the designs:
+## Reading the Report
 
-1. **Inspect** — Inquisitor analyzes the codebase, producing a findings report.
-2. **Audit** — An agent reads the findings alongside the project's design documents and answers two
-   questions: Does the code implement what the designs specify? Does the code implement only what
-   the designs specify? No missing capabilities. No unnecessary complexity. Just as stated.
-3. **Simplify** — The agent fixes unjustified findings. Independent findings can be fixed in
-   parallel. Return to step 1.
+The report shows where complexity lives. Three signals — compared against each other — reveal what
+needs to change.
 
-The IAS loop is defined by the Inquisitor skill (`SKILL.md`). Inquisitor produces the findings report. The
-skill produces judgment. The designs are the authority.
+**Designs** — what the code should be. The intended architecture, in the project's design
+documents. The tool doesn't know the designs — the agent brings that context.
+
+**Names** — the code's vocabulary. Package names, type names, function names. They map code to
+design concepts. If the design says "connection pool" and the code has `ResourceManager`, that's
+already a signal — either the vocabulary diverges (confusion) or the concepts differ (mismatch).
+
+**Metrics** — the code's actual structure. They reveal what role each piece plays regardless of what
+it's called or what it's meant to be:
+
+| Level | Metric signature | Role |
+|-------|-----------------|------|
+| Package | Ca:high Ce:low I:low | Library — stable foundation, changes rarely |
+| Package | Ca:low Ce:high I:high | Leaf module — implementation, complexity lives here |
+| Package | Ca:high Ce:high | Hub — everything flows through it, often a problem |
+| | | |
+| Type | LCOM4:1 | One job |
+| Type | LCOM4:N | N independent jobs — design should name each |
+| | | |
+| Function | fan_out:high cog:low | Coordinator — orchestrates without deciding |
+| Function | fan_out:high cog:high | Overloaded — coordinates AND computes, almost never justified |
+| Function | fan_in:high | Utility — heavily reused, must be simple |
+| Function | cog:high fan_out:low | Calculator — complex but self-contained |
+
+"High" and "low" are relative to the codebase medians shown in the report. A package with Ce:4 in a
+codebase where median Ce is 1 has high efferent coupling.
+
+All three align in healthy code. Mismatches between any pair are the signal:
+
+- **Design says X, metrics show Y** — The design describes a stable persistence layer but the package has I:0.95 (volatile). Intent doesn't match structure.
+- **Design says X, names say Y** — The design describes "event routing" but the code calls it `DataProcessor`. Vocabulary drift.
+- **Names and metrics align, but no design covers it** — A cohesive, well-structured package named `cache` — but no design mentions caching. Code nobody asked for.
+
+These mismatches map to three problems:
+- Design describes behavior but no complexity exists for it → **missing implementation**
+- Complexity exists but no design describes it → **extra implementation**
+- Complexity exists and maps to a design concept, but the structure is wrong → **poor architecture**
+
+**Proportionality** — complexity is justified when proportional to what the design describes.
+The design says "handles 10 protocol states" and the function has cog:40 → 4 per state, fine.
+The design says "wraps HTTP responses" and the function has cog:40 → 40x what's needed.
+
+**Cross-level insight** — Ca/Ce tell you the package's role. fan_in tells you which functions in
+that package ARE the contract others depend on. Together: "this is a library (Ca:4) and these 2
+functions (fan_in:8, fan_in:6) are its real interface — the other 18 functions are internal
+machinery." This means: simplifying internals is cheap (nothing external uses them). Changing
+high-fan_in functions is expensive (everything uses them). When the design says "simplify this
+package," the metrics tell you where to cut safely.
+
+**Worked example** — A type `OrderProcessor` in `pkg-a` (Ca:3, I:0.25) shows LCOM4:3, CBO:8, 12
+methods. The design document says: "OrderProcessor validates, prices, and fulfills orders." Three
+design-described operations → three method clusters → LCOM4:3 is explained. CBO:8 with three
+integration points (validation rules, pricing engine, fulfillment service) → ~2.7 types per
+integration. The metrics match the design's described scope. Verdict: justified.
 
 ## Output
 
-The output is a self-contained findings report to stdout. A reader should understand every section
-without referencing this document.
-
-### Overview
-
-The report opens with the module identity, counts, and per-level medians establishing what "normal"
-looks like in this codebase.
+The report opens with module identity, a glossary defining every abbreviation with citations and
+action guidance, medians establishing what "normal" looks like, and a package listing:
 
 ```
 github.com/example/project
   8 packages · 62 types · 296 functions · 11906 lines
 
   Glossary:
-    cog     cognitive complexity — reader difficulty, penalizes nesting (Campbell 2018)
-    cyc     cyclomatic complexity — execution paths (McCabe 1976)
-    Ca      afferent coupling — packages depending on this one (Martin 2002)
-    Ce      efferent coupling — packages this one depends on (Martin 2002)
-    I       instability — Ce/(Ca+Ce), 0=stable 1=volatile (Martin 2002)
-    A       abstractness — interfaces / total types (Martin 2002)
-    D       distance — |A+I-1|, stability-abstractness balance (Martin 2002)
-    LCOM4   cohesion — connected method groups, 1=cohesive (Hitz & Montazeri 1995)
-    CBO     coupling between objects — external types used (Chidamber & Kemerer 1994)
-    fan_in  call sites referencing this function
-    fan_out distinct functions called
+    cog     cognitive complexity (Campbell 2018) — measures reader difficulty by penalizing
+            nesting depth. An if inside a for costs more than two flat structures. Functions
+            exceeding cog:15 correlate with elevated defect rates. Decompose or flatten.
+
+    cyc     cyclomatic complexity (McCabe 1976) — counts linearly independent execution paths.
+            Higher values mean more test cases needed for coverage and more states a reader
+            must track. Widely used as a maintenance risk indicator.
+
+    fan_in  direct static call sites referencing this function. High fan_in means the
+            function is heavily reused — changes to its contract are expensive. Low fan_in
+            (especially fan_in:1) suggests the function may not justify its abstraction cost.
+
+    fan_out distinct functions called from this function's body. High fan_out means the
+            function coordinates many others — it's a point of high cognitive load and
+            change sensitivity.
+
+    LCOM4   lack of cohesion (Hitz & Montazeri 1995) — connected components in the method-
+            field graph. LCOM4:1 means all methods work together through shared state.
+            LCOM4 > 1 means the type contains independent method groups that don't interact —
+            a sign it should be split. Higher values correlate with defect-proneness.
+
+    CBO     coupling between objects (Chidamber & Kemerer 1994) — distinct types from other
+            packages used through fields, parameters, and bodies. Basili et al. (1996) found
+            CBO correlates with fault-proneness; practitioners use CBO > 5 as a threshold.
+            Reduce by narrowing interfaces or splitting responsibilities.
+
+    Ca      afferent coupling (Martin 2002) — packages depending on this one. High Ca means
+            changes here ripple outward. Stable packages (high Ca, low Ce) should change
+            rarely and define abstractions.
+
+    Ce      efferent coupling (Martin 2002) — packages this one depends on. High Ce means
+            this package is sensitive to changes elsewhere. Volatile packages (low Ca, high Ce)
+            are expected to change often.
+
+    I       instability (Martin 2002) — Ce/(Ca+Ce). 0 = maximally stable (everything depends
+            on it, it depends on nothing). 1 = maximally volatile (nothing depends on it, it
+            depends on everything). Dependencies should point toward stability.
+
+    A       abstractness (Martin 2002) — interfaces / total types. Abstract packages define
+            contracts without implementation. Martin's stable-abstractions principle: stable
+            packages should be abstract so they can be extended without modification.
+
+    D       distance (Martin 2002) — |A+I-1|. Measures deviation from the ideal: stable
+            packages should be abstract, volatile packages should be concrete. D = 0 is
+            ideal. High D suggests a package is either too concrete for its stability or
+            too abstract for its volatility.
 
   Medians:
     package    Ce:1  18 exports  740 lines
     type       LCOM4:1  CBO:0  0 methods
-    function   cog:3  cyc:4  fan_in:2  14 lines
+    function   cog:3  cyc:4  fan_in:2  fan_out:4  14 lines
 
   Packages:
     pkg-a    5596 lines (47%)  Ca:1  Ce:4  I:0.80
@@ -61,82 +139,16 @@ github.com/example/project
     pkg-e     619 lines  (5%)  Ca:2  Ce:1  I:0.33
 ```
 
-The medians establish what "normal" looks like. The package listing shows what exists — size,
-coupling direction, and instability. Metric-based finding sections show the relevant median for context.
+### Threshold Sections
 
-### Findings
+Sections that fire when a value exceeds a research-backed or practitioner-established limit.
+All sections sort items by primary metric descending.
 
-One section per test. Tests with research-backed thresholds report candidates that exceed the
-threshold. Tests without established thresholds report evidence for the agent to evaluate against
-the designs.
-
-Sections only appear when findings or evidence exist.
-
-#### Threshold Tests
-
-These tests fire when a research-backed or definitional threshold is exceeded.
-
-| Section                  | Threshold               | Citation                    | Implies                                           |
-| ------------------------ | ----------------------- | --------------------------- | ------------------------------------------------- |
-| Cohesion                 | LCOM4 > 1               | Hitz & Montazeri, 1995      | This type should be split. Method clusters shown. |
-| Cognitive Complexity     | cog > 15                | Campbell, SonarSource, 2018 | This function is doing too much.                  |
-| Coupling Between Objects | CBO > 5                 | Basili, Briand & Melo, 1996 | This type is entangled with too many others.      |
-| Delegation               | body is single call     | Fowler, 1999 ("Middle Man") | Indirection without logic. Inline candidate.      |
-| Dangling Exports         | zero cross-package refs | —                           | Unexport or remove.                               |
-| Unmanaged Goroutines     | no lifecycle evidence   | —                           | No context, waitgroup, or channel management.     |
-| Star Topology            | zero imports between non-hub packages      | —                  | Merge packages or introduce sibling dependencies that justify the boundaries. |
-| Dependency Cycles        | cycle detected in import graph             | —                  | Circular dependencies prevent independent change.       |
-
-#### Evidence
-
-These sections report metric values for the agent to evaluate against the designs. No established
-threshold exists — the agent decides what the designs justify.
-
-| Section                 | What is reported                                               | Citation                       |
-| ----------------------- | -------------------------------------------------------------- | ------------------------------ |
-| Architecture Balance    | D for every package, sorted by D descending                    | Martin, 2002                   |
-| Encapsulation           | Encapsulation ratio for every package, sorted ascending        | —                              |
-| Single-Caller Functions | All functions with fan_in = 1                                  | Henry & Kafura, 1981 (concept) |
-| Parameter Groups        | All parameter type tuples appearing in ≥ 2 function signatures | Fowler, 1999 ("Data Clump")    |
-
-When a function qualifies for both Delegation and Single-Caller, only the Delegation finding is
-shown. Delegation is the more specific signal — the function body is literally a single call, making
-inline mechanical. Single-Caller is the weaker signal — low complexity and one caller suggests
-inline but doesn't guarantee it.
-
-Each section follows this structure:
-
-```
-=== [Test Name] ([Citation]) ===
-[What this test measures]
-[What a finding implies — what to DO about it]
-
-  [candidate]  [evidence]  [location]
-```
-
-#### Cohesion Detail
-
-When LCOM4 > 1, the output shows the actual method clusters — not just the count. The union-find
-that computes connected components already identifies which methods belong to which cluster.
-
-```
-=== Cohesion — LCOM4 (Hitz & Montazeri 1995) ===
-Connected method groups sharing a struct. LCOM4:1 = cohesive. LCOM4 > 1 = multiple
-responsibilities sharing one type.
-Implies: split into separate types, one per group.
-
-  MyService (pkg-a)                              LCOM4:5  14 methods  CBO:4
-    Group 1 [scope]: method1, method2, method3
-    Group 2 [validation]: method4, method5, method6
-    Group 3 [output]: method7, method8
-    Group 4 [routing]: method9
-    Group 5 [filtering]: method10
-```
-
-#### Context Annotations
-
-The output shows the codebase median alongside each finding to provide context. A function with
-cog:133 in a codebase where median cog is 3 tells a different story than cog:133 where median is 50.
+| Section | Threshold | Citation |
+|---|---|---|
+| Cohesion | LCOM4 > 1 | Hitz & Montazeri, 1995 |
+| Cognitive Complexity | cog > 15 | Campbell, SonarSource, 2018 |
+| Coupling Between Objects | CBO > 5 | Practitioner convention; Basili, Briand & Melo 1996 |
 
 ```
 === Cognitive Complexity (Campbell 2018) ===
@@ -147,15 +159,36 @@ Implies: decompose or simplify.
 
   ProcessItems()           cog:133  pkg-c     205 lines
   BuildGraph()             cog:104  pkg-e     200 lines
-  HandleDeletion()         cog:78   pkg-a     174 lines
 ```
 
-The codebase median appears in the section header, not as per-finding annotations.
+```
+=== Cohesion — LCOM4 (Hitz & Montazeri 1995) ===
+Connected method groups sharing a struct. LCOM4:1 = cohesive. LCOM4 > 1 = multiple
+responsibilities sharing one type.
+Implies: split into separate types, one per group.
 
-#### Evidence Sections
+  MyService (pkg-a)                              LCOM4:5  14 methods  CBO:4
+    Group 1: method1, method2, method3
+    Group 2: method4, method5, method6
+    Group 3: method7, method8
+    Group 4: method9
+    Group 5: method10
+```
 
-Evidence sections report metric values without filtering. The agent evaluates each against the
-designs.
+```
+=== Coupling Between Objects — CBO (Chidamber & Kemerer 1994) ===
+Distinct types from other packages referenced through fields, parameters, return types,
+and method bodies. Measures how entangled a type is with its environment.
+Threshold: CBO > 5. Codebase median: 2.
+Implies: narrow interfaces or split responsibilities.
+
+  RequestHandler (pkg-a)   CBO:12  LCOM4:3  8 methods
+  EventBus (pkg-b)         CBO:9   LCOM4:1  5 methods
+```
+
+### Evidence Sections
+
+Sections that report values without filtering for the agent to evaluate against the designs.
 
 ```
 === Architecture Balance (Martin 2002) ===
@@ -168,120 +201,10 @@ No established threshold — evaluate against the designs.
   pkg-b   D:0.33  A:0.00  I:0.67  (volatile, concrete)
   pkg-d   D:0.50  A:0.00  I:0.50
   pkg-e   D:0.67  A:0.00  I:0.33
-
-=== Encapsulation ===
-Fraction of a package's symbols that are hidden (unexported).
-No established threshold — evaluate against the designs.
-
-  pkg-c   encapsulation:0.00  13 exports  0 hidden  Ca:4
-  pkg-d   encapsulation:0.15   7 exports  1 hidden  Ca:1
-  pkg-a   encapsulation:0.35  12 exports  6 hidden  Ca:2
-
-=== Single-Caller Functions ===
-Functions with exactly one call site. Each adds a name and a jump.
-Not all single-caller functions are problems — evaluate against the designs.
-
-  12 of 62 functions (19%) have fan_in = 1
-  pkg-a: helperOne, helperTwo, helperThree
-  pkg-b: utilityA, utilityB
-
-=== Parameter Groups ===
-Parameter type tuples appearing in multiple function signatures. Recurring tuples
-may indicate a missing struct.
-
-  (string, string, string) in 5 functions
-  (TypeA, TypeB) in 3 functions
-  (context.Context, TypeC) in 2 functions
 ```
 
-## Metrics Reference
+## Scope
 
-Each metric has a formal definition and (where applicable) a citation. The output explains metrics
-inline — this section is the reference for the formal foundations.
-
-### Function Level
-
-| Metric                      | Definition                                                                                          | Citation                    |
-| --------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------- |
-| Cognitive complexity (cog)  | Reader difficulty with nesting penalties. Each control structure adds 1; nesting adds +1 per level. | Campbell, SonarSource, 2018 |
-| Cyclomatic complexity (cyc) | Linearly independent paths. 1 + count of `if`, `case`, `for`, `&&`, `\|\|`.                         | McCabe, 1976                |
-| Fan-in                      | Call sites within the analyzed codebase referencing this function.                                  | —                           |
-| Fan-out                     | Distinct functions/methods called from this function's body.                                        | —                           |
-| Parameters                  | Input parameter count.                                                                              | —                           |
-| Lines                       | End line - start line + 1.                                                                          | —                           |
-
-### Type Level
-
-| Metric  | Definition                                                                                          | Citation                  |
-| ------- | --------------------------------------------------------------------------------------------------- | ------------------------- |
-| LCOM4   | Connected components in the method-field usage graph. Nodes = methods, edges = shared field access. | Hitz & Montazeri, 1995    |
-| CBO     | Distinct external types referenced through fields, signatures, and bodies.                          | Chidamber & Kemerer, 1994 |
-| Methods | Total methods (exported + unexported).                                                              | —                         |
-| Fields  | Struct field count.                                                                                 | —                         |
-
-### Package Level
-
-| Metric                 | Definition                                                               | Citation     |
-| ---------------------- | ------------------------------------------------------------------------ | ------------ |
-| Afferent coupling (Ca) | Packages in the analyzed set that import this package.                   | Martin, 2002 |
-| Efferent coupling (Ce) | Packages this package imports within the analyzed set.                   | Martin, 2002 |
-| Instability (I)        | Ce / (Ca + Ce). 0 = stable, 1 = volatile.                                | Martin, 2002 |
-| Abstractness (A)       | Interfaces / total types.                                                | Martin, 2002 |
-| Distance (D)           | \|A + I - 1\|. Deviation from the ideal stability-abstractness tradeoff. | Martin, 2002 |
-| Encapsulation ratio    | Unexported symbols / total symbols.                                      | —            |
-| Exported symbols       | Public functions + types + methods + constants.                          | —            |
-| Lines                  | Total source lines excluding tests.                                      | —            |
-
-### Module Level
-
-| Metric                | Definition                                         |
-| --------------------- | -------------------------------------------------- |
-| Packages              | Count of Go packages.                              |
-| Internal dependencies | Import edges between packages in the analyzed set. |
-| External dependencies | Third-party modules imported.                      |
-| Lines                 | Total source lines.                                |
-
-## Finding Selection
-
-Inquisitor computes a complexity score internally to sort findings and evidence. Threshold tests use
-the score for ordering candidates. Evidence sections use it for sort order but not for filtering —
-all values are reported. The score is not shown in the output.
-
-### Algorithm
-
-Mean of percentile ranks across metrics, computed against all peers at the same level.
-
-```
-For every node at a given level:
-  For each contributing metric:
-    Rank all nodes by that metric (ascending)
-    Assign percentile rank: rank / (n - 1)  →  [0.0, 1.0]
-  Score = mean(percentile ranks)
-```
-
-### Contributing Metrics
-
-| Level    | Metrics                                    | Rationale                                                      |
-| -------- | ------------------------------------------ | -------------------------------------------------------------- |
-| Function | cognitive, parameters, fan_out, fan_in     | Complexity, interface width, dependency reach, reuse evidence. |
-| Type     | LCOM4, CBO, methods                        | Cohesion, coupling, surface area.                              |
-| Package  | efferent_coupling, exported_symbols, lines | Outward dependency, API surface, scale.                        |
-
-### Finding Thresholds
-
-Threshold tests use thresholds from the defining research. Evidence sections have no threshold —
-they report values for the agent to evaluate.
-
-| Test                 | Threshold                                    | Basis                                                                             |
-| -------------------- | -------------------------------------------- | --------------------------------------------------------------------------------- |
-| Cohesion             | LCOM4 > 1                                    | Definitional — connected components in method-field graph (Hitz & Montazeri 1995) |
-| Cognitive Complexity | cog > 15                                     | Author's recommendation, calibrated against McCabe's 10 (Campbell 2018)           |
-| CBO                  | CBO > 5                                      | Empirical fault correlation (Basili, Briand & Melo 1996)                          |
-| Delegation           | body is single call                          | Definitional — Fowler's "Middle Man" smell (1999)                                 |
-| Dangling             | zero cross-package refs                      | Definitional                                                                      |
-| Unmanaged Goroutines | no lifecycle evidence                        | Definitional                                                                      |
-| Star Topology        | zero imports between non-hub packages        | Definitional                                                                      |
-| Dependency Cycles    | cycle exists in the package import graph     | Definitional                                                                      |
-
-Evidence sections (Architecture Balance, Encapsulation, Single-Caller, Parameter Groups) have no
-threshold. The tool reports values. The agent evaluates against the designs.
+- **Generated code**: Files with a `// Code generated` header are excluded.
+- **Parse errors**: If any package fails to load, the tool exits with an error.
+- **Exit code**: 0 on success. Non-zero if packages fail to load.
