@@ -15,9 +15,9 @@ type Package struct {
 	Types           []*Type
 	Ca              int     // afferent coupling - packages depending on this one
 	Ce              int     // efferent coupling - packages this one depends on
-	Instability     float64 // Ce / (Ca + Ce)
-	Abstractness    float64 // interfaces / total types
-	Distance        float64 // |A + I - 1|
+	I               float64 // Ce / (Ca + Ce)
+	A               float64 // interfaces / total types
+	D               float64 // |A + I - 1|
 	ExportedSymbols int
 	Lines           int
 	Imports         []string // internal import paths (within analyzed set)
@@ -32,12 +32,12 @@ type Type struct {
 	CBO           int
 	Methods       int
 	Fields        int
-	MethodDetails []MethodDetail // for LCOM4 computation
+	methodDetails []methodDetail // for LCOM4 computation
 	Clusters      [][]string     // method clusters when LCOM4 > 1
 }
 
-// MethodDetail records which fields a method accesses, used for LCOM4 computation.
-type MethodDetail struct {
+// methodDetail records which fields a method accesses, used for LCOM4 computation.
+type methodDetail struct {
 	Name       string
 	FieldsUsed []string // field names accessed
 }
@@ -49,8 +49,8 @@ type Function struct {
 	File            string // base filename where function is declared
 	Receiver        string // empty for free functions
 	PointerReceiver bool
-	Cognitive       int
-	Cyclomatic      int
+	Cog             int
+	Cyc             int
 	FanIn           int
 	FanOut          int
 	Lines           int

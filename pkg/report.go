@@ -111,8 +111,8 @@ func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*F
 		fanOuts := make([]int, len(functions))
 		lines := make([]int, len(functions))
 		for i, f := range functions {
-			cogs[i] = f.Cognitive
-			cycs[i] = f.Cyclomatic
+			cogs[i] = f.Cog
+			cycs[i] = f.Cyc
 			fanIns[i] = f.FanIn
 			fanOuts[i] = f.FanOut
 			lines[i] = f.Lines
@@ -140,7 +140,7 @@ func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*F
 			pct = p.Lines * 100 / mod.Lines
 		}
 		fmt.Fprintf(w, "    %-*s  %d lines (%d%%)  Ca:%d  Ce:%d  I:%.2f\n",
-			maxLen(names), names[i], p.Lines, pct, p.Ca, p.Ce, p.Instability)
+			maxLen(names), names[i], p.Lines, pct, p.Ca, p.Ce, p.I)
 	}
 }
 
@@ -203,7 +203,7 @@ func writeCohesionThreshold(w io.Writer, types_ []*Type) {
 func writeCognitiveThreshold(w io.Writer, functions []*Function) {
 	var candidates []*Function
 	for _, f := range functions {
-		if f.Cognitive > 15 {
+		if f.Cog > 15 {
 			candidates = append(candidates, f)
 		}
 	}
@@ -211,7 +211,7 @@ func writeCognitiveThreshold(w io.Writer, functions []*Function) {
 		return
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Cognitive > candidates[j].Cognitive
+		return candidates[i].Cog > candidates[j].Cog
 	})
 
 	medCog := medianFuncCognitive(functions)
@@ -245,7 +245,7 @@ func writeCognitiveThreshold(w io.Writer, functions []*Function) {
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %-*s  cog:%-5d %d lines\n",
 			labelWidth, e.label,
-			e.f.Cognitive,
+			e.f.Cog,
 			e.f.Lines)
 	}
 }
@@ -310,7 +310,7 @@ func writeArchitectureBalance(w io.Writer, packages []*Package) {
 	sorted := make([]*Package, len(packages))
 	copy(sorted, packages)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Distance > sorted[j].Distance
+		return sorted[i].D > sorted[j].D
 	})
 
 	fmt.Fprintln(w)
@@ -329,28 +329,28 @@ func writeArchitectureBalance(w io.Writer, packages []*Package) {
 	for i, p := range sorted {
 		desc := archDescription(p)
 		fmt.Fprintf(w, "  %-*s  D:%.2f  A:%.2f  I:%.2f  (%s)\n",
-			nameWidth, names[i], p.Distance, p.Abstractness, p.Instability, desc)
+			nameWidth, names[i], p.D, p.A, p.I, desc)
 	}
 }
 
 func archDescription(p *Package) string {
 	var parts []string
 
-	if p.Instability < 0.5 {
+	if p.I < 0.5 {
 		parts = append(parts, "stable")
 	} else {
 		parts = append(parts, "volatile")
 	}
 
-	if p.Abstractness == 0 {
+	if p.A == 0 {
 		parts = append(parts, "concrete")
-	} else if p.Abstractness < 1 {
+	} else if p.A < 1 {
 		parts = append(parts, "partially abstract")
 	} else {
 		parts = append(parts, "fully abstract")
 	}
 
-	if p.Abstractness == 0 {
+	if p.A == 0 {
 		parts = append(parts, "zero interfaces")
 	}
 
@@ -410,7 +410,7 @@ func medianTypeCBO(types_ []*Type) int {
 func medianFuncCognitive(functions []*Function) int {
 	vals := make([]int, len(functions))
 	for i, f := range functions {
-		vals[i] = f.Cognitive
+		vals[i] = f.Cog
 	}
 	return median(vals)
 }

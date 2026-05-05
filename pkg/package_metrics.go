@@ -9,8 +9,8 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// BuildAnalyzedPaths returns the set of all package paths from the loaded packages.
-func BuildAnalyzedPaths(pkgs []*packages.Package) map[string]bool {
+// buildAnalyzedPaths returns the set of all package paths from the loaded packages.
+func buildAnalyzedPaths(pkgs []*packages.Package) map[string]bool {
 	paths := make(map[string]bool, len(pkgs))
 	for _, pkg := range pkgs {
 		paths[pkg.PkgPath] = true
@@ -18,8 +18,18 @@ func BuildAnalyzedPaths(pkgs []*packages.Package) map[string]bool {
 	return paths
 }
 
-// AnalyzePackages computes package-level and module-level metrics for all loaded packages.
-func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*Type, analyzedPaths map[string]bool) (*Module, []*Package) {
+// Analyze runs the full analysis pipeline on the loaded packages, returning
+// module, package, function, and type results.
+func Analyze(pkgs []*packages.Package) (*Module, []*Package, []*Function, []*Type) {
+	analyzedPaths := buildAnalyzedPaths(pkgs)
+	functions := analyzeFunctions(pkgs, analyzedPaths)
+	types := analyzeTypes(pkgs, analyzedPaths)
+	mod, packages := analyzePackages(pkgs, functions, types, analyzedPaths)
+	return mod, packages, functions, types
+}
+
+// analyzePackages computes package-level and module-level metrics for all loaded packages.
+func analyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*Type, analyzedPaths map[string]bool) (*Module, []*Package) {
 	funcsByPkg, typesByPkg := indexByPackage(functions, types_)
 	pkgMap, analyzed := buildPackages(pkgs, funcsByPkg, typesByPkg, analyzedPaths)
 	computeAfferentCoupling(analyzed, pkgMap)
@@ -108,7 +118,7 @@ func computeAbstractness(pkg *packages.Package, p *Package) {
 		}
 	}
 	if totalNamed > 0 {
-		p.Abstractness = float64(ifaces) / float64(totalNamed)
+		p.A = float64(ifaces) / float64(totalNamed)
 	}
 }
 
@@ -132,14 +142,14 @@ func computeAfferentCoupling(analyzed []*Package, pkgMap map[string]*Package) {
 	}
 }
 
-// computeStabilityMetrics derives Instability and Distance from Ca, Ce, and Abstractness.
+// computeStabilityMetrics derives I and D from Ca, Ce, and A.
 func computeStabilityMetrics(analyzed []*Package) {
 	for _, p := range analyzed {
 		total := p.Ca + p.Ce
 		if total > 0 {
-			p.Instability = float64(p.Ce) / float64(total)
+			p.I = float64(p.Ce) / float64(total)
 		}
-		p.Distance = math.Abs(p.Abstractness + p.Instability - 1)
+		p.D = math.Abs(p.A + p.I - 1)
 	}
 }
 

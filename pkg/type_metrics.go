@@ -9,9 +9,9 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// AnalyzeTypes computes LCOM4, CBO, method count, and field count for every
+// analyzeTypes computes LCOM4, CBO, method count, and field count for every
 // named struct type declared in the analyzed packages.
-func AnalyzeTypes(pkgs []*packages.Package, analyzedPaths map[string]bool) []*Type {
+func analyzeTypes(pkgs []*packages.Package, analyzedPaths map[string]bool) []*Type {
 	var results []*Type
 	for _, pkg := range pkgs {
 		if !analyzedPaths[pkg.PkgPath] {
@@ -63,7 +63,7 @@ func analyzePackageTypes(pkg *packages.Package) []*Type {
 			CBO:           cbo,
 			Methods:       len(methods),
 			Fields:        st.NumFields(),
-			MethodDetails: details,
+			methodDetails: details,
 			Clusters:      clusters,
 		})
 	}
@@ -97,8 +97,8 @@ func collectStructMethods(named *types.Named) []methodInfo {
 
 // buildFieldAccessSets walks each method's AST body to determine which fields
 // it accesses and which sibling methods it calls on the receiver.
-func buildFieldAccessSets(pkg *packages.Package, st *types.Struct, methods []methodInfo, methodAST map[string]*ast.FuncDecl, methodIndex map[string]int) ([]MethodDetail, []map[string]bool, []map[string]bool) {
-	details := make([]MethodDetail, len(methods))
+func buildFieldAccessSets(pkg *packages.Package, st *types.Struct, methods []methodInfo, methodAST map[string]*ast.FuncDecl, methodIndex map[string]int) ([]methodDetail, []map[string]bool, []map[string]bool) {
+	details := make([]methodDetail, len(methods))
 	methodFieldSets := make([]map[string]bool, len(methods))
 	methodCallSets := make([]map[string]bool, len(methods))
 

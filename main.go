@@ -37,10 +37,7 @@ Analyzes all packages matching the given patterns (default: ./...).`,
 				return err
 			}
 
-			analyzedPaths := inquisitor.BuildAnalyzedPaths(pkgs)
-			functions := inquisitor.AnalyzeFunctions(pkgs, analyzedPaths)
-			types := inquisitor.AnalyzeTypes(pkgs, analyzedPaths)
-			mod, packages := inquisitor.AnalyzePackages(pkgs, functions, types, analyzedPaths)
+			mod, packages, functions, types := inquisitor.Analyze(pkgs)
 			inquisitor.GenerateReport(os.Stdout, mod, packages, functions, types)
 			return nil
 		},

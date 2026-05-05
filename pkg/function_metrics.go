@@ -15,9 +15,9 @@ type fnResult struct {
 	callees map[string]bool // set of callee keys (pkg.Path().Name)
 }
 
-// AnalyzeFunctions computes per-function complexity metrics across all packages.
+// analyzeFunctions computes per-function complexity metrics across all packages.
 // analyzedPaths scopes fan-in counting to internal callers only.
-func AnalyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) []*Function {
+func analyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) []*Function {
 	results := computeFunctionMetrics(pkgs)
 	return computeFanIn(results, analyzedPaths)
 }
@@ -53,11 +53,11 @@ func computeFunctionMetrics(pkgs []*packages.Package) []fnResult {
 				f.EndLine = pkg.Fset.Position(fd.End()).Line
 				f.Lines = f.EndLine - f.StartLine + 1
 
-				// Cognitive complexity
-				f.Cognitive = cognitiveComplexity(fd)
+			// Cognitive complexity
+			f.Cog = cognitiveComplexity(fd)
 
-				// Cyclomatic complexity
-				f.Cyclomatic = cyclomaticComplexity(fd)
+			// Cyclomatic complexity
+			f.Cyc = cyclomaticComplexity(fd)
 
 			// Fan-out: distinct functions called
 			callees := fanOut(fd, pkg.TypesInfo)
