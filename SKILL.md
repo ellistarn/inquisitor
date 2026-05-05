@@ -16,8 +16,8 @@ Four charges:
 4. **Excess** — the code implements the design but with unjustified complexity.
 
 It works through **Understand → Analyze → Judge → Remediate**: understand the designs, measure the code,
-bring charges, remediate them, repeat until the implementation is the simplest version that satisfies
-the designs.
+bring charges, remediate them. Fix by severity, descending. Each iteration addresses one coherent
+cluster — remediate, return to Analyze, repeat. Stop when charges are resolved or blocked on user input.
 
 ## 1. Understand
 
@@ -170,7 +170,7 @@ Each charge has a natural remedy.
 
 ### Absence → Implement
 
-The design mandates behavior the code doesn't deliver. Write it. The design tells you what to build — the concept map tells you where it belongs in the architecture.
+The design mandates behavior the code doesn't deliver. Write it. The design tells you what to build — the concept map tells you where it belongs in the architecture. Do not ask — the design already decided.
 
 ### Heresy → Cut or Canonize
 
@@ -180,26 +180,11 @@ Code exists that no design sanctions. Two paths:
 
 ### Schism → Rename
 
-Heal the schism. Rename the symbol to match the design's term. Design and code should speak one language.
+Heal the schism. Rename the symbol to match the design's term. Design and code should speak one language. Do not ask — the design already named it.
 
 ### Excess → Simplify
 
-The code implements the design but with wrong structure or disproportionate complexity. The tool's output describes what each metric implies — use that guidance. Name every refactored piece after concepts the design uses.
+The code implements the design but with wrong structure or disproportionate complexity. The tool's output describes what each metric implies — use that guidance. Name every refactored piece after concepts the design uses. Do not ask — the design already scoped it.
 
-### Complexity displacement
-
-If simplifying A pushes complexity to B, check whether B is now guilty. If complexity circulates rather than shrinks, it's inherent — re-evaluate as JUSTIFIED and cite the design.
-
-### Scale
-
-Fix by severity, descending. Each iteration addresses one coherent cluster. Don't attempt everything in one pass.
-
-Return to Analyze.
-
-### Convergence
-
-Continue the loop until significant progress has been made — charges are resolved, not just identified. You may be asked to conduct another inquisition later.
-
-Within a single session: remediate what you can, present what requires user decision (Heresy, Absence that needs design clarification), and stop when the remaining charges are blocked on external input or the codebase has materially improved.
 
 
