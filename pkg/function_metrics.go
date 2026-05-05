@@ -4,19 +4,27 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 
 	"golang.org/x/tools/go/packages"
 )
 
-// analyzeFunctions computes per-function complexity metrics across all packages.
+// fnResult pairs a function with the set of callees it invokes.
+type fnResult struct {
+	fn      *Function
+	callees map[string]bool // set of callee keys (pkg.Path().Name)
+}
+
+// AnalyzeFunctions computes per-function complexity metrics across all packages.
 // analyzedPaths scopes fan-in counting to internal callers only.
 func AnalyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) []*Function {
-	// First pass: collect all functions and compute per-function metrics.
-	// Track fan-out targets per function for fan-in aggregation.
-	type fnResult struct {
-		fn      *Function
-		callees map[string]bool // set of callee keys (pkg.Path().Name)
-	}
+	results := computeFunctionMetrics(pkgs)
+	return computeFanIn(results, analyzedPaths)
+}
+
+// computeFunctionMetrics iterates all packages and functions, computing
+// per-function metrics (cognitive complexity, cyclomatic complexity, fan-out, lines).
+func computeFunctionMetrics(pkgs []*packages.Package) []fnResult {
 	var results []fnResult
 
 	for _, pkg := range pkgs {
@@ -38,19 +46,10 @@ func AnalyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) [
 					_, f.PointerReceiver = fd.Recv.List[0].Type.(*ast.StarExpr)
 				}
 
-				// Parameters
-				if fd.Type.Params != nil {
-					for _, field := range fd.Type.Params.List {
-						if len(field.Names) == 0 {
-							f.Parameters++ // unnamed parameter
-						} else {
-							f.Parameters += len(field.Names)
-						}
-					}
-				}
-
 				// Lines
-				f.StartLine = pkg.Fset.Position(fd.Pos()).Line
+				pos := pkg.Fset.Position(fd.Pos())
+				f.StartLine = pos.Line
+				f.File = filepath.Base(pos.Filename)
 				f.EndLine = pkg.Fset.Position(fd.End()).Line
 				f.Lines = f.EndLine - f.StartLine + 1
 
@@ -60,28 +59,39 @@ func AnalyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) [
 				// Cyclomatic complexity
 				f.Cyclomatic = cyclomaticComplexity(fd)
 
-				// Fan-out: distinct functions called
-				callees := fanOut(fd, pkg.TypesInfo)
-				f.FanOut = len(callees)
+			// Fan-out: distinct functions called
+			callees := fanOut(fd, pkg.TypesInfo)
+			// Exclude recursive self-calls from fan-out
+			selfKey := funcKey(f.Package, f.Receiver, f.Name)
+			delete(callees, selfKey)
+			f.FanOut = len(callees)
 
-				results = append(results, fnResult{fn: f, callees: callees})
+			results = append(results, fnResult{fn: f, callees: callees})
 			}
 		}
 	}
 
-	// Second pass: compute fan-in.
-	// Build map: callee key -> count of internal callers.
+	return results
+}
+
+// computeFanIn aggregates fan-in by scanning each function's callees,
+// counting only callers from analyzedPaths as internal callers.
+func computeFanIn(results []fnResult, analyzedPaths map[string]bool) []*Function {
 	fanInCount := map[string]int{}
 	for _, r := range results {
 		if !analyzedPaths[r.fn.Package] {
 			continue
 		}
+		callerKey := funcKey(r.fn.Package, r.fn.Receiver, r.fn.Name)
 		for key := range r.callees {
+			// Exclude recursive self-calls from fan-in
+			if key == callerKey {
+				continue
+			}
 			fanInCount[key]++
 		}
 	}
 
-	// Build lookup from function identity to result, assign fan-in.
 	functions := make([]*Function, len(results))
 	for i, r := range results {
 		key := funcKey(r.fn.Package, r.fn.Receiver, r.fn.Name)
@@ -169,125 +179,117 @@ func (c *cognitiveVisitor) walkStmtList(stmts []ast.Stmt, nesting int) {
 
 func (c *cognitiveVisitor) walkStmt(stmt ast.Stmt, nesting int) {
 	switch s := stmt.(type) {
+	// --- Control flow: increment + nesting penalty + recurse into body ---
 	case *ast.IfStmt:
-		c.complexity += 1 + nesting // structural + nesting penalty
-		if s.Init != nil {
-			c.walkStmt(s.Init, nesting)
-		}
-		c.walkExpr(s.Cond, nesting) // for boolean operators
-		c.walkStmtList(s.Body.List, nesting+1)
+		c.walkNested(s.Body.List, nesting)
+		c.walkStmtOpt(s.Init, nesting)
+		c.walkExpr(s.Cond, nesting)
 		if s.Else != nil {
 			c.walkElse(s.Else, nesting)
 		}
-
 	case *ast.ForStmt:
-		c.complexity += 1 + nesting
-		if s.Init != nil {
-			c.walkStmt(s.Init, nesting)
-		}
-		if s.Cond != nil {
-			c.walkExpr(s.Cond, nesting)
-		}
-		if s.Post != nil {
-			c.walkStmt(s.Post, nesting)
-		}
-		c.walkStmtList(s.Body.List, nesting+1)
-
+		c.walkNested(s.Body.List, nesting)
+		c.walkStmtOpt(s.Init, nesting)
+		c.walkExprOpt(s.Cond, nesting)
+		c.walkStmtOpt(s.Post, nesting)
 	case *ast.RangeStmt:
-		c.complexity += 1 + nesting
-		c.walkStmtList(s.Body.List, nesting+1)
-
+		c.walkNested(s.Body.List, nesting)
 	case *ast.SwitchStmt:
-		c.complexity += 1 + nesting
-		if s.Init != nil {
-			c.walkStmt(s.Init, nesting)
-		}
-		if s.Tag != nil {
-			c.walkExpr(s.Tag, nesting)
-		}
-		c.walkStmtList(s.Body.List, nesting+1)
-
+		c.walkNested(s.Body.List, nesting)
+		c.walkStmtOpt(s.Init, nesting)
+		c.walkExprOpt(s.Tag, nesting)
 	case *ast.TypeSwitchStmt:
-		c.complexity += 1 + nesting
-		if s.Init != nil {
-			c.walkStmt(s.Init, nesting)
-		}
-		if s.Assign != nil {
-			c.walkStmt(s.Assign, nesting)
-		}
-		c.walkStmtList(s.Body.List, nesting+1)
-
+		c.walkNested(s.Body.List, nesting)
+		c.walkStmtOpt(s.Init, nesting)
+		c.walkStmtOpt(s.Assign, nesting)
 	case *ast.SelectStmt:
-		c.complexity += 1 + nesting
-		c.walkStmtList(s.Body.List, nesting+1)
+		c.walkNested(s.Body.List, nesting)
 
+	// --- Branch statements: goto, labeled break/continue ---
 	case *ast.BranchStmt:
-		// goto, labeled break, labeled continue
-		if s.Tok == token.GOTO || (s.Label != nil && (s.Tok == token.BREAK || s.Tok == token.CONTINUE)) {
-			c.complexity++
-		}
+		c.walkBranchStmt(s)
 
+	// --- Clauses and structural wrappers ---
 	case *ast.BlockStmt:
 		c.walkStmtList(s.List, nesting)
-
 	case *ast.CaseClause:
-		for _, expr := range s.List {
-			c.walkExpr(expr, nesting)
-		}
+		c.walkExprs(s.List, nesting)
 		c.walkStmtList(s.Body, nesting)
-
 	case *ast.CommClause:
-		if s.Comm != nil {
-			c.walkStmt(s.Comm, nesting)
-		}
+		c.walkStmtOpt(s.Comm, nesting)
 		c.walkStmtList(s.Body, nesting)
-
 	case *ast.LabeledStmt:
 		c.walkStmt(s.Stmt, nesting)
 
+	// --- Expressions, assignments, declarations: just recurse ---
 	case *ast.ExprStmt:
 		c.walkExpr(s.X, nesting)
-
 	case *ast.AssignStmt:
-		for _, expr := range s.Rhs {
-			c.walkExpr(expr, nesting)
-		}
-		for _, expr := range s.Lhs {
-			c.walkExpr(expr, nesting)
-		}
-
+		c.walkExprs(s.Rhs, nesting)
+		c.walkExprs(s.Lhs, nesting)
 	case *ast.ReturnStmt:
-		for _, expr := range s.Results {
-			c.walkExpr(expr, nesting)
-		}
-
+		c.walkExprs(s.Results, nesting)
 	case *ast.SendStmt:
 		c.walkExpr(s.Chan, nesting)
 		c.walkExpr(s.Value, nesting)
-
 	case *ast.IncDecStmt:
 		c.walkExpr(s.X, nesting)
-
 	case *ast.GoStmt:
 		c.walkExpr(s.Call, nesting)
-
 	case *ast.DeferStmt:
 		c.walkExpr(s.Call, nesting)
-
 	case *ast.DeclStmt:
-		gd, ok := s.Decl.(*ast.GenDecl)
+		c.walkDeclStmt(s, nesting)
+	}
+}
+
+// walkNested handles the common control-flow pattern: increment complexity by
+// 1 (structural) + nesting penalty, then recurse into the body at nesting+1.
+func (c *cognitiveVisitor) walkNested(body []ast.Stmt, nesting int) {
+	c.complexity += 1 + nesting
+	c.walkStmtList(body, nesting+1)
+}
+
+// walkBranchStmt increments complexity for goto, labeled break, or labeled continue.
+func (c *cognitiveVisitor) walkBranchStmt(s *ast.BranchStmt) {
+	if s.Tok == token.GOTO || (s.Label != nil && (s.Tok == token.BREAK || s.Tok == token.CONTINUE)) {
+		c.complexity++
+	}
+}
+
+// walkDeclStmt walks value initializers in a declaration statement.
+func (c *cognitiveVisitor) walkDeclStmt(s *ast.DeclStmt, nesting int) {
+	gd, ok := s.Decl.(*ast.GenDecl)
+	if !ok {
+		return
+	}
+	for _, spec := range gd.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
 		if !ok {
-			return
+			continue
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for _, v := range vs.Values {
-				c.walkExpr(v, nesting)
-			}
-		}
+		c.walkExprs(vs.Values, nesting)
+	}
+}
+
+// walkStmtOpt walks a statement if non-nil.
+func (c *cognitiveVisitor) walkStmtOpt(stmt ast.Stmt, nesting int) {
+	if stmt != nil {
+		c.walkStmt(stmt, nesting)
+	}
+}
+
+// walkExprOpt walks an expression if non-nil.
+func (c *cognitiveVisitor) walkExprOpt(expr ast.Expr, nesting int) {
+	if expr != nil {
+		c.walkExpr(expr, nesting)
+	}
+}
+
+// walkExprs walks a slice of expressions.
+func (c *cognitiveVisitor) walkExprs(exprs []ast.Expr, nesting int) {
+	for _, expr := range exprs {
+		c.walkExpr(expr, nesting)
 	}
 }
 
@@ -465,6 +467,14 @@ func resolveCallee(call *ast.CallExpr, info *types.Info) *types.Func {
 	fn, ok := obj.(*types.Func)
 	if !ok {
 		return nil
+	}
+	// Interface methods can't be statically resolved to a concrete implementation.
+	if sig, ok := fn.Type().(*types.Signature); ok {
+		if recv := sig.Recv(); recv != nil {
+			if _, isIface := recv.Type().Underlying().(*types.Interface); isIface {
+				return nil
+			}
+		}
 	}
 	return fn
 }
