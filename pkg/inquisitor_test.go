@@ -79,8 +79,8 @@ func Complex(items []int) int {
 
 	dir := writeTempModule(t, "test/cog", source)
 	pkgs := loadTestPackages(t, dir)
-	analyzedPaths := BuildAnalyzedPaths(pkgs)
-	functions := AnalyzeFunctions(pkgs, analyzedPaths)
+	analyzedPaths := buildAnalyzedPaths(pkgs)
+	functions := analyzeFunctions(pkgs, analyzedPaths)
 
 	var found *Function
 	for _, f := range functions {
@@ -92,13 +92,13 @@ func Complex(items []int) int {
 	if found == nil {
 		t.Fatal("function Complex not found in analysis results")
 	}
-	if found.Cognitive <= 15 {
-		t.Errorf("expected cognitive complexity > 15, got %d", found.Cognitive)
+	if found.Cog <= 15 {
+		t.Errorf("expected cognitive complexity > 15, got %d", found.Cog)
 	}
 
 	// Also verify it appears in the report's cognitive complexity section.
-	types_ := AnalyzeTypes(pkgs, analyzedPaths)
-	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
+	types_ := analyzeTypes(pkgs, analyzedPaths)
+	module, packages := analyzePackages(pkgs, functions, types_, analyzedPaths)
 
 	var buf bytes.Buffer
 	GenerateReport(&buf, module, packages, functions, types_)
@@ -151,8 +151,8 @@ func (s *Service) SetCache(v string) { s.cache = v }
 
 	dir := writeTempModule(t, "test/lcom", source)
 	pkgs := loadTestPackages(t, dir)
-	analyzedPaths := BuildAnalyzedPaths(pkgs)
-	types_ := AnalyzeTypes(pkgs, analyzedPaths)
+	analyzedPaths := buildAnalyzedPaths(pkgs)
+	types_ := analyzeTypes(pkgs, analyzedPaths)
 	found := findType(t, types_, "Service")
 
 	t.Run("metrics", func(t *testing.T) {
@@ -171,8 +171,8 @@ func (s *Service) SetCache(v string) { s.cache = v }
 	})
 
 	t.Run("report", func(t *testing.T) {
-		functions := AnalyzeFunctions(pkgs, analyzedPaths)
-		module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
+		functions := analyzeFunctions(pkgs, analyzedPaths)
+		module, packages := analyzePackages(pkgs, functions, types_, analyzedPaths)
 
 		var buf bytes.Buffer
 		GenerateReport(&buf, module, packages, functions, types_)
@@ -214,10 +214,10 @@ func runPipeline(t *testing.T, dir string) string {
 	for _, pkg := range pkgs {
 		filterGeneratedFiles(pkg)
 	}
-	analyzedPaths := BuildAnalyzedPaths(pkgs)
-	functions := AnalyzeFunctions(pkgs, analyzedPaths)
-	types_ := AnalyzeTypes(pkgs, analyzedPaths)
-	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
+	analyzedPaths := buildAnalyzedPaths(pkgs)
+	functions := analyzeFunctions(pkgs, analyzedPaths)
+	types_ := analyzeTypes(pkgs, analyzedPaths)
+	module, packages := analyzePackages(pkgs, functions, types_, analyzedPaths)
 	var buf bytes.Buffer
 	GenerateReport(&buf, module, packages, functions, types_)
 	return buf.String()
@@ -426,10 +426,10 @@ func TestSelfAnalysis(t *testing.T) {
 		t.Fatal("no packages loaded")
 	}
 
-	analyzedPaths := BuildAnalyzedPaths(pkgs)
-	functions := AnalyzeFunctions(pkgs, analyzedPaths)
-	types_ := AnalyzeTypes(pkgs, analyzedPaths)
-	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
+	analyzedPaths := buildAnalyzedPaths(pkgs)
+	functions := analyzeFunctions(pkgs, analyzedPaths)
+	types_ := analyzeTypes(pkgs, analyzedPaths)
+	module, packages := analyzePackages(pkgs, functions, types_, analyzedPaths)
 
 	var buf bytes.Buffer
 	GenerateReport(&buf, module, packages, functions, types_)
