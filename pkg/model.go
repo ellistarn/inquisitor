@@ -10,7 +10,7 @@ type Module struct {
 // Package represents an analyzed Go package with coupling and abstraction metrics.
 type Package struct {
 	Name            string
-	Path            string  // import path
+	Path            string // import path
 	Functions       []*Function
 	Types           []*Type
 	Ca              int     // afferent coupling - packages depending on this one
@@ -43,16 +43,16 @@ type MethodDetail struct {
 
 // Function represents an analyzed Go function with complexity metrics.
 type Function struct {
-	Name       string
-	Package    string // package import path
+	Name            string
+	Package         string // package import path
 	Receiver        string // empty for free functions
 	PointerReceiver bool
 	Cognitive       int
-	Cyclomatic int
-	FanIn      int
-	FanOut     int
-	Parameters int
-	Lines      int
-	StartLine  int
-	EndLine    int
+	Cyclomatic      int
+	FanIn           int
+	FanOut          int
+	Parameters      int
+	Lines           int
+	StartLine       int
+	EndLine         int
 }

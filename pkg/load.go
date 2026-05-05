@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -12,9 +13,130 @@ import (
 
 var generatedRe = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
 
-// loadPackages loads Go packages matching the given patterns, filtering out
+// isFilesystemPath reports whether a pattern looks like a filesystem path
+// rather than a Go import path.
+func isFilesystemPath(pattern string) bool {
+	// Strip /... suffix for directory detection
+	clean := strings.TrimSuffix(pattern, "/...")
+	if strings.HasPrefix(clean, ".") || strings.HasPrefix(clean, "/") {
+		return true
+	}
+	// Check if the resolved path is an existing directory on disk
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(abs)
+	return err == nil && info.IsDir()
+}
+
+// findModuleRoot walks up from dir looking for a go.mod file and returns the
+// directory containing it.
+func findModuleRoot(dir string) (string, error) {
+	orig, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	cur := orig
+	for {
+		if _, err := os.Stat(filepath.Join(cur, "go.mod")); err == nil {
+			return cur, nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", fmt.Errorf("no go.mod found above %s", orig)
+		}
+		cur = parent
+	}
+}
+
+// resolvePatterns rewrites filesystem path patterns into module-relative
+// import path patterns and determines the appropriate Config.Dir.
+// Returns the rewritten patterns and the module root directory (empty string
+// if no filesystem paths were detected).
+func resolvePatterns(patterns []string) ([]string, string, error) {
+	var moduleRoot string
+	resolved := make([]string, 0, len(patterns))
+
+	for _, pat := range patterns {
+		if !isFilesystemPath(pat) {
+			resolved = append(resolved, pat)
+			continue
+		}
+
+		// Separate /... suffix
+		suffix := ""
+		dir := pat
+		if strings.HasSuffix(dir, "/...") {
+			suffix = "/..."
+			dir = strings.TrimSuffix(dir, "/...")
+		}
+
+		// Resolve to absolute path
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolving path %q: %w", pat, err)
+		}
+
+		// Verify it's a directory
+		info, err := os.Stat(absDir)
+		if err != nil {
+			return nil, "", fmt.Errorf("stat %q: %w", absDir, err)
+		}
+		if !info.IsDir() {
+			return nil, "", fmt.Errorf("%q is not a directory", absDir)
+		}
+
+		// Find module root
+		modRoot, err := findModuleRoot(absDir)
+		if err != nil {
+			return nil, "", fmt.Errorf("finding module root for %q: %w", pat, err)
+		}
+
+		// Ensure all filesystem patterns share the same module root
+		if moduleRoot == "" {
+			moduleRoot = modRoot
+		} else if moduleRoot != modRoot {
+			return nil, "", fmt.Errorf("patterns span multiple modules: %q and %q", moduleRoot, modRoot)
+		}
+
+		// Compute relative path from module root to target
+		rel, err := filepath.Rel(modRoot, absDir)
+		if err != nil {
+			return nil, "", fmt.Errorf("computing relative path: %w", err)
+		}
+
+		// Rewrite as ./relative/... pattern
+		if rel == "." {
+			resolved = append(resolved, "./...") // module root itself
+		} else {
+			// If no /... suffix was given, add it (directory with no .go files)
+			if suffix == "" {
+				suffix = "/..."
+			}
+			resolved = append(resolved, "./"+filepath.ToSlash(rel)+suffix)
+		}
+	}
+
+	if moduleRoot != "" {
+		for _, p := range resolved {
+			if !strings.HasPrefix(p, "./") && p != "./..." {
+				return nil, "", fmt.Errorf("cannot mix filesystem paths with import path patterns (got %q)", p)
+			}
+		}
+	}
+
+	return resolved, moduleRoot, nil
+}
+
+// LoadPackages loads Go packages matching the given patterns, filtering out
 // generated files from syntax trees. Test files are included.
 func LoadPackages(patterns []string) ([]*packages.Package, error) {
+	resolvedPatterns, moduleRoot, err := resolvePatterns(patterns)
+	if err != nil {
+		return nil, fmt.Errorf("resolving patterns: %w", err)
+	}
+
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
@@ -26,7 +148,12 @@ func LoadPackages(patterns []string) ([]*packages.Package, error) {
 			packages.NeedDeps,
 		Tests: true,
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+
+	if moduleRoot != "" {
+		cfg.Dir = moduleRoot
+	}
+
+	pkgs, err := packages.Load(cfg, resolvedPatterns...)
 	if err != nil {
 		return nil, fmt.Errorf("loading packages: %w", err)
 	}

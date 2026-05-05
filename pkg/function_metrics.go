@@ -32,11 +32,11 @@ func AnalyzeFunctions(pkgs []*packages.Package, analyzedPaths map[string]bool) [
 					Package: pkg.PkgPath,
 				}
 
-			// Receiver
-			if fd.Recv != nil && len(fd.Recv.List) > 0 {
-				f.Receiver = receiverTypeName(fd.Recv.List[0].Type)
-				_, f.PointerReceiver = fd.Recv.List[0].Type.(*ast.StarExpr)
-			}
+				// Receiver
+				if fd.Recv != nil && len(fd.Recv.List) > 0 {
+					f.Receiver = receiverTypeName(fd.Recv.List[0].Type)
+					_, f.PointerReceiver = fd.Recv.List[0].Type.(*ast.StarExpr)
+				}
 
 				// Parameters
 				if fd.Type.Params != nil {
