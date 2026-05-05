@@ -50,6 +50,55 @@ func findModuleRoot(dir string) (string, error) {
 	}
 }
 
+// resolveFilesystemPattern resolves a single filesystem path pattern into a
+// module-relative import path pattern. It returns the rewritten pattern and
+// the module root directory.
+func resolveFilesystemPattern(pat string) (resolved string, modRoot string, err error) {
+	// Separate /... suffix
+	suffix := ""
+	dir := pat
+	if strings.HasSuffix(dir, "/...") {
+		suffix = "/..."
+		dir = strings.TrimSuffix(dir, "/...")
+	}
+
+	// Resolve to absolute path
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving path %q: %w", pat, err)
+	}
+
+	// Verify it's a directory
+	info, err := os.Stat(absDir)
+	if err != nil {
+		return "", "", fmt.Errorf("stat %q: %w", absDir, err)
+	}
+	if !info.IsDir() {
+		return "", "", fmt.Errorf("%q is not a directory", absDir)
+	}
+
+	// Find module root
+	modRoot, err = findModuleRoot(absDir)
+	if err != nil {
+		return "", "", fmt.Errorf("finding module root for %q: %w", pat, err)
+	}
+
+	// Compute relative path from module root to target
+	rel, err := filepath.Rel(modRoot, absDir)
+	if err != nil {
+		return "", "", fmt.Errorf("computing relative path: %w", err)
+	}
+
+	// Rewrite as ./relative/... pattern
+	if rel == "." {
+		return "./...", modRoot, nil
+	}
+	if suffix == "" {
+		suffix = "/..."
+	}
+	return "./" + filepath.ToSlash(rel) + suffix, modRoot, nil
+}
+
 // resolvePatterns rewrites filesystem path patterns into module-relative
 // import path patterns and determines the appropriate Config.Dir.
 // Returns the rewritten patterns and the module root directory (empty string
@@ -64,33 +113,9 @@ func resolvePatterns(patterns []string) ([]string, string, error) {
 			continue
 		}
 
-		// Separate /... suffix
-		suffix := ""
-		dir := pat
-		if strings.HasSuffix(dir, "/...") {
-			suffix = "/..."
-			dir = strings.TrimSuffix(dir, "/...")
-		}
-
-		// Resolve to absolute path
-		absDir, err := filepath.Abs(dir)
+		rewritten, modRoot, err := resolveFilesystemPattern(pat)
 		if err != nil {
-			return nil, "", fmt.Errorf("resolving path %q: %w", pat, err)
-		}
-
-		// Verify it's a directory
-		info, err := os.Stat(absDir)
-		if err != nil {
-			return nil, "", fmt.Errorf("stat %q: %w", absDir, err)
-		}
-		if !info.IsDir() {
-			return nil, "", fmt.Errorf("%q is not a directory", absDir)
-		}
-
-		// Find module root
-		modRoot, err := findModuleRoot(absDir)
-		if err != nil {
-			return nil, "", fmt.Errorf("finding module root for %q: %w", pat, err)
+			return nil, "", err
 		}
 
 		// Ensure all filesystem patterns share the same module root
@@ -100,22 +125,7 @@ func resolvePatterns(patterns []string) ([]string, string, error) {
 			return nil, "", fmt.Errorf("patterns span multiple modules: %q and %q", moduleRoot, modRoot)
 		}
 
-		// Compute relative path from module root to target
-		rel, err := filepath.Rel(modRoot, absDir)
-		if err != nil {
-			return nil, "", fmt.Errorf("computing relative path: %w", err)
-		}
-
-		// Rewrite as ./relative/... pattern
-		if rel == "." {
-			resolved = append(resolved, "./...") // module root itself
-		} else {
-			// If no /... suffix was given, add it (directory with no .go files)
-			if suffix == "" {
-				suffix = "/..."
-			}
-			resolved = append(resolved, "./"+filepath.ToSlash(rel)+suffix)
-		}
+		resolved = append(resolved, rewritten)
 	}
 
 	if moduleRoot != "" {
