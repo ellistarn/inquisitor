@@ -9,7 +9,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// buildAnalyzedPaths returns the set of all package paths from the loaded packages.
+// BuildAnalyzedPaths returns the set of all package paths from the loaded packages.
 func BuildAnalyzedPaths(pkgs []*packages.Package) map[string]bool {
 	paths := make(map[string]bool, len(pkgs))
 	for _, pkg := range pkgs {
@@ -18,9 +18,18 @@ func BuildAnalyzedPaths(pkgs []*packages.Package) map[string]bool {
 	return paths
 }
 
-// analyzePackages computes package-level and module-level metrics for all loaded packages.
+// AnalyzePackages computes package-level and module-level metrics for all loaded packages.
 func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*Type, analyzedPaths map[string]bool) (*Module, []*Package) {
-	// Index functions and types by package path.
+	funcsByPkg, typesByPkg := indexByPackage(functions, types_)
+	pkgMap, analyzed := buildPackages(pkgs, funcsByPkg, typesByPkg, analyzedPaths)
+	computeAfferentCoupling(analyzed, pkgMap)
+	computeStabilityMetrics(analyzed)
+	mod := assembleModule(pkgs, analyzed)
+	return mod, analyzed
+}
+
+// indexByPackage groups functions and types by their package path.
+func indexByPackage(functions []*Function, types_ []*Type) (map[string][]*Function, map[string][]*Type) {
 	funcsByPkg := make(map[string][]*Function)
 	for _, f := range functions {
 		funcsByPkg[f.Package] = append(funcsByPkg[f.Package], f)
@@ -29,8 +38,12 @@ func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*
 	for _, t := range types_ {
 		typesByPkg[t.Package] = append(typesByPkg[t.Package], t)
 	}
+	return funcsByPkg, typesByPkg
+}
 
-	// Build analyzed packages.
+// buildPackages constructs Package structs with efferent coupling (Ce),
+// exported symbols, abstractness, and line counts.
+func buildPackages(pkgs []*packages.Package, funcsByPkg map[string][]*Function, typesByPkg map[string][]*Type, analyzedPaths map[string]bool) (map[string]*Package, []*Package) {
 	pkgMap := make(map[string]*Package)
 	var analyzed []*Package
 	for _, pkg := range pkgs {
@@ -55,39 +68,61 @@ func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*
 		// Ce = number of internal imports.
 		p.Ce = len(p.Imports)
 
-		// Abstractness and ExportedSymbols from the type-checker scope.
-		if pkg.Types != nil {
-			scope := pkg.Types.Scope()
-			var totalNamed, ifaces int
-			for _, name := range scope.Names() {
-				obj := scope.Lookup(name)
-				if token.IsExported(name) {
-					p.ExportedSymbols++
-				}
-				if tn, ok := obj.(*types.TypeName); ok {
-					totalNamed++
-					if _, isIface := tn.Type().Underlying().(*types.Interface); isIface {
-						ifaces++
-					}
-				}
-			}
-			if totalNamed > 0 {
-				p.Abstractness = float64(ifaces) / float64(totalNamed)
-			}
-		}
-
-		// Lines — sum across filtered syntax files.
-		for _, f := range pkg.Syntax {
-			start := pkg.Fset.Position(f.Pos())
-			end := pkg.Fset.Position(f.End())
-			p.Lines += end.Line - start.Line + 1
-		}
+		countExports(pkg, p)
+		computeAbstractness(pkg, p)
+		countLines(pkg, p)
 
 		pkgMap[p.Path] = p
 		analyzed = append(analyzed, p)
 	}
+	return pkgMap, analyzed
+}
 
-	// Ca — count how many other packages import each package.
+// countExports counts the number of exported symbols in the package scope.
+func countExports(pkg *packages.Package, p *Package) {
+	if pkg.Types == nil {
+		return
+	}
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		if token.IsExported(name) {
+			p.ExportedSymbols++
+		}
+	}
+}
+
+// computeAbstractness computes the ratio of interfaces to total named types (Martin's A metric).
+func computeAbstractness(pkg *packages.Package, p *Package) {
+	if pkg.Types == nil {
+		return
+	}
+	scope := pkg.Types.Scope()
+	var totalNamed, ifaces int
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if tn, ok := obj.(*types.TypeName); ok {
+			totalNamed++
+			if _, isIface := tn.Type().Underlying().(*types.Interface); isIface {
+				ifaces++
+			}
+		}
+	}
+	if totalNamed > 0 {
+		p.Abstractness = float64(ifaces) / float64(totalNamed)
+	}
+}
+
+// countLines sums lines across filtered syntax files for the package.
+func countLines(pkg *packages.Package, p *Package) {
+	for _, f := range pkg.Syntax {
+		start := pkg.Fset.Position(f.Pos())
+		end := pkg.Fset.Position(f.End())
+		p.Lines += end.Line - start.Line + 1
+	}
+}
+
+// computeAfferentCoupling counts how many other analyzed packages import each package (Ca).
+func computeAfferentCoupling(analyzed []*Package, pkgMap map[string]*Package) {
 	for _, p := range analyzed {
 		for _, imp := range p.Imports {
 			if target, ok := pkgMap[imp]; ok {
@@ -95,8 +130,10 @@ func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*
 			}
 		}
 	}
+}
 
-	// Instability and Distance.
+// computeStabilityMetrics derives Instability and Distance from Ca, Ce, and Abstractness.
+func computeStabilityMetrics(analyzed []*Package) {
 	for _, p := range analyzed {
 		total := p.Ca + p.Ce
 		if total > 0 {
@@ -104,8 +141,10 @@ func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*
 		}
 		p.Distance = math.Abs(p.Abstractness + p.Instability - 1)
 	}
+}
 
-	// Module.
+// assembleModule builds the Module aggregate from analyzed packages.
+func assembleModule(pkgs []*packages.Package, analyzed []*Package) *Module {
 	mod := &Module{
 		Packages: analyzed,
 	}
@@ -117,8 +156,7 @@ func AnalyzePackages(pkgs []*packages.Package, functions []*Function, types_ []*
 	for _, p := range analyzed {
 		mod.Lines += p.Lines
 	}
-
-	return mod, analyzed
+	return mod
 }
 
 // commonPrefix derives a module path from package paths by finding their longest common prefix.
@@ -156,116 +194,4 @@ func lastSlash(s string) int {
 		}
 	}
 	return -1
-}
-
-// detectCycles finds dependency cycles in the package import graph using DFS.
-// Each cycle is a slice of package paths. Cycles are sorted by length, then alphabetically.
-func DetectCycles(packages []*Package) [][]string {
-	// Build adjacency list.
-	adj := make(map[string][]string)
-	for _, p := range packages {
-		adj[p.Path] = p.Imports
-	}
-
-	const (
-		unvisited  = 0
-		inProgress = 1
-		done       = 2
-	)
-	state := make(map[string]int)
-	parent := make(map[string]string) // for path reconstruction
-	var cycles [][]string
-	seen := make(map[string]bool) // deduplicate cycles by canonical form
-
-	var dfs func(node string)
-	dfs = func(node string) {
-		state[node] = inProgress
-		for _, next := range adj[node] {
-			switch state[next] {
-			case unvisited:
-				parent[next] = node
-				dfs(next)
-			case inProgress:
-				// Back edge found — extract cycle.
-				cycle := extractCycle(parent, node, next)
-				key := canonicalCycleKey(cycle)
-				if !seen[key] {
-					seen[key] = true
-					cycles = append(cycles, cycle)
-				}
-			}
-		}
-		state[node] = done
-	}
-
-	// Collect and sort nodes for deterministic output.
-	nodes := make([]string, 0, len(adj))
-	for n := range adj {
-		nodes = append(nodes, n)
-	}
-	sort.Strings(nodes)
-
-	for _, n := range nodes {
-		if state[n] == unvisited {
-			dfs(n)
-		}
-	}
-
-	// Sort cycles: by length, then lexicographically.
-	sort.Slice(cycles, func(i, j int) bool {
-		if len(cycles[i]) != len(cycles[j]) {
-			return len(cycles[i]) < len(cycles[j])
-		}
-		for k := 0; k < len(cycles[i]) && k < len(cycles[j]); k++ {
-			if cycles[i][k] != cycles[j][k] {
-				return cycles[i][k] < cycles[j][k]
-			}
-		}
-		return false
-	})
-
-	return cycles
-}
-
-// extractCycle traces back from current to target through the parent map to build the cycle path.
-func extractCycle(parent map[string]string, current, target string) []string {
-	var path []string
-	visited := make(map[string]bool)
-	node := current
-	for node != target {
-		if visited[node] {
-			break // safety: should never happen, but prevents infinite loop
-		}
-		visited[node] = true
-		path = append(path, node)
-		node = parent[node]
-	}
-	path = append(path, target)
-	// Reverse so cycle reads in traversal order.
-	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
-		path[i], path[j] = path[j], path[i]
-	}
-	return path
-}
-
-// canonicalCycleKey produces a canonical string for a cycle so rotations are deduplicated.
-func canonicalCycleKey(cycle []string) string {
-	if len(cycle) == 0 {
-		return ""
-	}
-	// Find the lexicographically smallest rotation.
-	minIdx := 0
-	for i := 1; i < len(cycle); i++ {
-		if cycle[i] < cycle[minIdx] {
-			minIdx = i
-		}
-	}
-	var b []byte
-	for i := 0; i < len(cycle); i++ {
-		if i > 0 {
-			b = append(b, ' ')
-		}
-		b = append(b, cycle[(minIdx+i)%len(cycle)]...)
-	}
-	return string(b)
 }

@@ -7,14 +7,12 @@ import (
 	"strings"
 )
 
-func GenerateReport(w io.Writer, mod *Module, packages []*Package, functions []*Function, types_ []*Type, cycles [][]string) {
-	pkgNames := disambiguatedNameMap(packages)
+func GenerateReport(w io.Writer, mod *Module, packages []*Package, functions []*Function, types_ []*Type) {
 	writeOverview(w, mod, packages, functions, types_)
-	writeCohesionCandidates(w, types_, pkgNames)
-	writeCognitiveCandidates(w, functions, pkgNames)
-	writeCBOCandidates(w, types_, pkgNames)
-	writeCycleCandidates(w, cycles, packages, pkgNames)
-	writeArchitectureBalance(w, packages, pkgNames)
+	writeCohesionThreshold(w, types_)
+	writeCognitiveThreshold(w, functions)
+	writeCBOThreshold(w, types_)
+	writeArchitectureBalance(w, packages)
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +130,10 @@ func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*F
 		return sorted[i].Lines > sorted[j].Lines
 	})
 
-	names := disambiguatedNames(sorted)
+	names := make([]string, len(sorted))
+	for i, p := range sorted {
+		names[i] = p.Path
+	}
 	for i, p := range sorted {
 		pct := 0
 		if mod.Lines > 0 {
@@ -147,7 +148,7 @@ func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*F
 // Threshold Candidates
 // ---------------------------------------------------------------------------
 
-func writeCohesionCandidates(w io.Writer, types_ []*Type, pkgNames map[string]string) {
+func writeCohesionThreshold(w io.Writer, types_ []*Type) {
 	var candidates []*Type
 	for _, t := range types_ {
 		if t.LCOM4 > 1 {
@@ -179,7 +180,7 @@ func writeCohesionCandidates(w io.Writer, types_ []*Type, pkgNames map[string]st
 	entries := make([]entry, len(candidates))
 	for i, t := range candidates {
 		entries[i] = entry{
-			label: fmt.Sprintf("%s (%s)", t.Name, pkgNames[t.Package]),
+			label: qualifiedTypeName(t),
 			t:     t,
 		}
 	}
@@ -199,7 +200,7 @@ func writeCohesionCandidates(w io.Writer, types_ []*Type, pkgNames map[string]st
 	}
 }
 
-func writeCognitiveCandidates(w io.Writer, functions []*Function, pkgNames map[string]string) {
+func writeCognitiveThreshold(w io.Writer, functions []*Function) {
 	var candidates []*Function
 	for _, f := range functions {
 		if f.Cognitive > 15 {
@@ -230,7 +231,7 @@ func writeCognitiveCandidates(w io.Writer, functions []*Function, pkgNames map[s
 	entries := make([]entry, len(candidates))
 	for i, f := range candidates {
 		entries[i] = entry{
-			label: funcDisplayName(f),
+			label: qualifiedFuncName(f),
 			f:     f,
 		}
 	}
@@ -242,15 +243,14 @@ func writeCognitiveCandidates(w io.Writer, functions []*Function, pkgNames map[s
 	}
 
 	for _, e := range entries {
-		fmt.Fprintf(w, "  %-*s  cog:%-5d %-*s  %d lines\n",
+		fmt.Fprintf(w, "  %-*s  cog:%-5d %d lines\n",
 			labelWidth, e.label,
 			e.f.Cognitive,
-			0, pkgNames[e.f.Package],
 			e.f.Lines)
 	}
 }
 
-func writeCBOCandidates(w io.Writer, types_ []*Type, pkgNames map[string]string) {
+func writeCBOThreshold(w io.Writer, types_ []*Type) {
 	var candidates []*Type
 	for _, t := range types_ {
 		if t.CBO > 5 {
@@ -281,7 +281,7 @@ func writeCBOCandidates(w io.Writer, types_ []*Type, pkgNames map[string]string)
 	entries := make([]entry, len(candidates))
 	for i, t := range candidates {
 		entries[i] = entry{
-			label: fmt.Sprintf("%s (%s)", t.Name, pkgNames[t.Package]),
+			label: qualifiedTypeName(t),
 			t:     t,
 		}
 	}
@@ -298,46 +298,11 @@ func writeCBOCandidates(w io.Writer, types_ []*Type, pkgNames map[string]string)
 	}
 }
 
-func writeCycleCandidates(w io.Writer, cycles [][]string, packages []*Package, pkgNames map[string]string) {
-	if len(cycles) == 0 {
-		return
-	}
-
-	// Sort by cycle length, then alphabetically by first element
-	sorted := make([][]string, len(cycles))
-	copy(sorted, cycles)
-	sort.Slice(sorted, func(i, j int) bool {
-		if len(sorted[i]) != len(sorted[j]) {
-			return len(sorted[i]) < len(sorted[j])
-		}
-		// Compare alphabetically by joined short names
-		a := cycleString(sorted[i])
-		b := cycleString(sorted[j])
-		return a < b
-	})
-
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "=== Dependency Cycles ===\n")
-	fmt.Fprintf(w, "Cycles in the package import graph. Circular dependencies prevent independent change.\n")
-	fmt.Fprintf(w, "Implies: break the cycle by extracting shared types into a new package or inverting a dependency.\n")
-	fmt.Fprintln(w)
-
-	for _, cycle := range sorted {
-		short := make([]string, len(cycle))
-		for i, p := range cycle {
-			short[i] = pkgNames[p]
-		}
-		// Close the cycle by repeating the first element
-		short = append(short, short[0])
-		fmt.Fprintf(w, "  %s\n", strings.Join(short, " → "))
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Evidence Sections
 // ---------------------------------------------------------------------------
 
-func writeArchitectureBalance(w io.Writer, packages []*Package, pkgNames map[string]string) {
+func writeArchitectureBalance(w io.Writer, packages []*Package) {
 	if len(packages) == 0 {
 		return
 	}
@@ -357,7 +322,7 @@ func writeArchitectureBalance(w io.Writer, packages []*Package, pkgNames map[str
 
 	names := make([]string, len(sorted))
 	for i, p := range sorted {
-		names[i] = pkgNames[p.Path]
+		names[i] = p.Path
 	}
 	nameWidth := maxLen(names)
 
@@ -396,13 +361,6 @@ func archDescription(p *Package) string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-func shortPkgName(path string) string {
-	if i := strings.LastIndex(path, "/"); i >= 0 {
-		return path[i+1:]
-	}
-	return path
-}
-
 func median(values []int) int {
 	if len(values) == 0 {
 		return 0
@@ -421,6 +379,16 @@ func funcDisplayName(f *Function) string {
 		return fmt.Sprintf("(*%s).%s()", f.Receiver, f.Name)
 	}
 	return fmt.Sprintf("%s.%s()", f.Receiver, f.Name)
+}
+
+// qualifiedFuncName returns "full/import/path.FuncDisplay()" format.
+func qualifiedFuncName(f *Function) string {
+	return f.Package + "." + funcDisplayName(f)
+}
+
+// qualifiedTypeName returns "full/import/path.TypeName" format.
+func qualifiedTypeName(t *Type) string {
+	return t.Package + "." + t.Name
 }
 
 func medianTypeLCOM4(types_ []*Type) int {
@@ -447,14 +415,6 @@ func medianFuncCognitive(functions []*Function) int {
 	return median(vals)
 }
 
-func cycleString(cycle []string) string {
-	short := make([]string, len(cycle))
-	for i, p := range cycle {
-		short[i] = shortPkgName(p)
-	}
-	return strings.Join(short, " → ")
-}
-
 func maxLen(ss []string) int {
 	m := 0
 	for _, s := range ss {
@@ -465,65 +425,4 @@ func maxLen(ss []string) int {
 	return m
 }
 
-// disambiguatedNames returns short package names for the given packages,
-// using enough path components to make each name unique.
-func disambiguatedNames(pkgs []*Package) []string {
-	names := make([]string, len(pkgs))
 
-	// Start with short names (1 component)
-	for i, p := range pkgs {
-		names[i] = shortPkgName(p.Path)
-	}
-
-	// Find duplicates and add path components until unique
-	for {
-		// Build map of name -> indices
-		seen := map[string][]int{}
-		for i, n := range names {
-			seen[n] = append(seen[n], i)
-		}
-
-		resolved := true
-		for _, indices := range seen {
-			if len(indices) <= 1 {
-				continue
-			}
-			resolved = false
-			// Add one more path component for each duplicate
-			for _, idx := range indices {
-				names[idx] = addPathComponent(pkgs[idx].Path, names[idx])
-			}
-		}
-		if resolved {
-			break
-		}
-	}
-	return names
-}
-
-// disambiguatedNameMap returns a map from package path to disambiguated short name.
-func disambiguatedNameMap(pkgs []*Package) map[string]string {
-	names := disambiguatedNames(pkgs)
-	m := make(map[string]string, len(pkgs))
-	for i, p := range pkgs {
-		m[p.Path] = names[i]
-	}
-	return m
-}
-
-// addPathComponent prepends one more path component to the current short name.
-func addPathComponent(fullPath, currentName string) string {
-	// Find where currentName starts in fullPath
-	suffix := "/" + currentName
-	i := strings.LastIndex(fullPath, suffix)
-	if i <= 0 {
-		return fullPath // can't disambiguate further
-	}
-	// Find the component before the suffix
-	prefix := fullPath[:i]
-	lastSlash := strings.LastIndex(prefix, "/")
-	if lastSlash < 0 {
-		return fullPath
-	}
-	return fullPath[lastSlash+1:]
-}

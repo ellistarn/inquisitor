@@ -157,23 +157,40 @@ func LoadPackages(patterns []string) ([]*packages.Package, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading packages: %w", err)
 	}
+	if err := validatePackageErrors(pkgs); err != nil {
+		return nil, err
+	}
+	deduped := deduplicateTestVariants(pkgs)
 
-	// Fail hard on package errors.
+	var result []*packages.Package
+	for _, pkg := range deduped {
+		filterGeneratedFiles(pkg)
+		if len(pkg.Syntax) == 0 {
+			continue // Skip packages with no analyzable source (e.g., synthetic test binaries)
+		}
+		result = append(result, pkg)
+	}
+	return result, nil
+}
+
+// validatePackageErrors fails hard if any package has load errors.
+func validatePackageErrors(pkgs []*packages.Package) error {
 	for _, pkg := range pkgs {
 		if len(pkg.Errors) > 0 {
 			for _, e := range pkg.Errors {
 				fmt.Fprintf(os.Stderr, "%s: %s\n", pkg.PkgPath, e)
 			}
-			return nil, fmt.Errorf("package %s has errors", pkg.PkgPath)
+			return fmt.Errorf("package %s has errors", pkg.PkgPath)
 		}
 	}
+	return nil
+}
 
-	// With Tests: true, go/packages produces variants:
-	//   "pkg" — production only
-	//   "pkg [pkg.test]" — production + in-package test files
-	//   "pkg_test [pkg.test]" — external test package
-	// Keep the augmented variant (includes test files) when it exists.
-	// Keep external test packages separately (they have a different PkgPath).
+// deduplicateTestVariants resolves test package variants produced by
+// go/packages when Tests is true. It keeps the augmented variant (which
+// includes in-package test files) when both the plain and augmented variants
+// exist for the same PkgPath.
+func deduplicateTestVariants(pkgs []*packages.Package) []*packages.Package {
 	byPath := map[string]*packages.Package{}
 	for _, pkg := range pkgs {
 		existing, ok := byPath[pkg.PkgPath]
@@ -186,28 +203,27 @@ func LoadPackages(patterns []string) ([]*packages.Package, error) {
 			}
 		}
 	}
-
-	var result []*packages.Package
+	result := make([]*packages.Package, 0, len(byPath))
 	for _, pkg := range byPath {
-		// Filter syntax trees: remove generated files.
-		var filtered []*ast.File
-		var filteredFiles []string
-		for i, f := range pkg.Syntax {
-			filename := pkg.CompiledGoFiles[i]
-			if isGenerated(f) {
-				continue
-			}
-			filtered = append(filtered, f)
-			filteredFiles = append(filteredFiles, filename)
-		}
-		if len(filtered) == 0 {
-			continue // Skip packages with no analyzable source (e.g., synthetic test binaries)
-		}
-		pkg.Syntax = filtered
-		pkg.CompiledGoFiles = filteredFiles
 		result = append(result, pkg)
 	}
-	return result, nil
+	return result
+}
+
+// filterGeneratedFiles removes generated files from the package's Syntax and
+// CompiledGoFiles slices in place.
+func filterGeneratedFiles(pkg *packages.Package) {
+	var filtered []*ast.File
+	var filteredFiles []string
+	for i, f := range pkg.Syntax {
+		if isGenerated(f) {
+			continue
+		}
+		filtered = append(filtered, f)
+		filteredFiles = append(filteredFiles, pkg.CompiledGoFiles[i])
+	}
+	pkg.Syntax = filtered
+	pkg.CompiledGoFiles = filteredFiles
 }
 
 // isGenerated reports whether a file contains the Go generated-code marker.

@@ -27,6 +27,7 @@ type Package struct {
 type Type struct {
 	Name          string
 	Package       string // package import path
+	File          string // base filename where type is declared
 	LCOM4         int
 	CBO           int
 	Methods       int
@@ -45,13 +46,13 @@ type MethodDetail struct {
 type Function struct {
 	Name            string
 	Package         string // package import path
+	File            string // base filename where function is declared
 	Receiver        string // empty for free functions
 	PointerReceiver bool
 	Cognitive       int
 	Cyclomatic      int
 	FanIn           int
 	FanOut          int
-	Parameters      int
 	Lines           int
 	StartLine       int
 	EndLine         int

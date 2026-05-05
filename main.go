@@ -41,8 +41,7 @@ Analyzes all packages matching the given patterns (default: ./...).`,
 			functions := inquisitor.AnalyzeFunctions(pkgs, analyzedPaths)
 			types := inquisitor.AnalyzeTypes(pkgs, analyzedPaths)
 			mod, packages := inquisitor.AnalyzePackages(pkgs, functions, types, analyzedPaths)
-			cycles := inquisitor.DetectCycles(packages)
-			inquisitor.GenerateReport(os.Stdout, mod, packages, functions, types, cycles)
+			inquisitor.GenerateReport(os.Stdout, mod, packages, functions, types)
 			return nil
 		},
 	}
@@ -63,6 +62,7 @@ by AI coding agents.`,
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
 }
 
 func installSkill() error {

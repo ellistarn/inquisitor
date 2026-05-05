@@ -99,10 +99,9 @@ func Complex(items []int) int {
 	// Also verify it appears in the report's cognitive complexity section.
 	types_ := AnalyzeTypes(pkgs, analyzedPaths)
 	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
-	cycles := DetectCycles(packages)
 
 	var buf bytes.Buffer
-	GenerateReport(&buf, module, packages, functions, types_, cycles)
+	GenerateReport(&buf, module, packages, functions, types_)
 	report := buf.String()
 
 	if !strings.Contains(report, "Cognitive Complexity") {
@@ -111,6 +110,29 @@ func Complex(items []int) int {
 	if !strings.Contains(report, "Complex()") {
 		t.Error("report does not mention Complex() in cognitive complexity section")
 	}
+}
+
+// findType returns the named type from the slice, or fails the test.
+func findType(t *testing.T, types []*Type, name string) *Type {
+	t.Helper()
+	for _, typ := range types {
+		if typ.Name == name {
+			return typ
+		}
+	}
+	t.Fatalf("type %s not found in analysis results", name)
+	return nil
+}
+
+// clusterMethods returns the set of all method names across clusters.
+func clusterMethods(clusters [][]string) map[string]bool {
+	methods := make(map[string]bool)
+	for _, cluster := range clusters {
+		for _, m := range cluster {
+			methods[m] = true
+		}
+	}
+	return methods
 }
 
 func TestLCOM4(t *testing.T) {
@@ -131,118 +153,262 @@ func (s *Service) SetCache(v string) { s.cache = v }
 	pkgs := loadTestPackages(t, dir)
 	analyzedPaths := BuildAnalyzedPaths(pkgs)
 	types_ := AnalyzeTypes(pkgs, analyzedPaths)
+	found := findType(t, types_, "Service")
 
-	var found *Type
-	for _, typ := range types_ {
-		if typ.Name == "Service" {
-			found = typ
-			break
+	t.Run("metrics", func(t *testing.T) {
+		if found.LCOM4 != 2 {
+			t.Errorf("expected LCOM4 = 2, got %d", found.LCOM4)
+		}
+		if len(found.Clusters) != 2 {
+			t.Errorf("expected 2 clusters, got %d", len(found.Clusters))
+		}
+		allMethods := clusterMethods(found.Clusters)
+		for _, expected := range []string{"GetDB", "SetDB", "GetCache", "SetCache"} {
+			if !allMethods[expected] {
+				t.Errorf("method %s not found in any cluster", expected)
+			}
+		}
+	})
+
+	t.Run("report", func(t *testing.T) {
+		functions := AnalyzeFunctions(pkgs, analyzedPaths)
+		module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
+
+		var buf bytes.Buffer
+		GenerateReport(&buf, module, packages, functions, types_)
+		report := buf.String()
+
+		for _, want := range []string{"Cohesion", "Service", "Group 1:", "Group 2:"} {
+			if !strings.Contains(report, want) {
+				t.Errorf("report missing expected string %q", want)
+			}
+		}
+	})
+}
+
+// writeTempMultiPackageModule creates a go.mod and multiple .go files organized by package subdirectories.
+// files is a map of relative path (e.g. "a/a.go") to source content.
+func writeTempMultiPackageModule(t *testing.T, moduleName string, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module "+moduleName+"\ngo 1.23\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if found == nil {
-		t.Fatal("type Service not found in analysis results")
-	}
-	if found.LCOM4 != 2 {
-		t.Errorf("expected LCOM4 = 2, got %d", found.LCOM4)
-	}
-	if len(found.Clusters) != 2 {
-		t.Errorf("expected 2 clusters, got %d", len(found.Clusters))
-	}
+	return dir
+}
 
-	// Verify the clusters contain the right methods.
-	allMethods := make(map[string]bool)
-	for _, cluster := range found.Clusters {
-		for _, m := range cluster {
-			allMethods[m] = true
-		}
+// runPipeline executes the full analysis pipeline on packages loaded from dir,
+// returning the generated report text.
+func runPipeline(t *testing.T, dir string) string {
+	t.Helper()
+	pkgs := loadTestPackages(t, dir)
+	for _, pkg := range pkgs {
+		filterGeneratedFiles(pkg)
 	}
-	for _, expected := range []string{"GetDB", "SetDB", "GetCache", "SetCache"} {
-		if !allMethods[expected] {
-			t.Errorf("method %s not found in any cluster", expected)
-		}
-	}
-
-	// Verify it appears in the cohesion report section.
+	analyzedPaths := BuildAnalyzedPaths(pkgs)
 	functions := AnalyzeFunctions(pkgs, analyzedPaths)
+	types_ := AnalyzeTypes(pkgs, analyzedPaths)
 	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
-	cycles := DetectCycles(packages)
-
 	var buf bytes.Buffer
-	GenerateReport(&buf, module, packages, functions, types_, cycles)
-	report := buf.String()
+	GenerateReport(&buf, module, packages, functions, types_)
+	return buf.String()
+}
 
-	if !strings.Contains(report, "Cohesion") {
-		t.Error("report missing Cohesion section")
+func TestFanInFanOut(t *testing.T) {
+	// 5 functions: A calls B and C, B calls C. D is isolated, E is recursive.
+	// Medians over 5 functions: fan_in values [0,0,0,1,2] → median=0, fan_out values [0,0,0,1,2] → median=0
+	source := `package main
+
+func A() { B(); C() }
+func B() { C() }
+func C() {}
+func D() {}
+func E() { E() }
+`
+	dir := writeTempModule(t, "test/fanio", source)
+	report := runPipeline(t, dir)
+
+	// The report must contain the module path and medians line with fan_in/fan_out.
+	if !strings.Contains(report, "test/fanio") {
+		t.Error("report missing module path 'test/fanio'")
 	}
-	if !strings.Contains(report, "Service") {
-		t.Error("report does not mention Service in cohesion section")
+	if !strings.Contains(report, "fan_in:") {
+		t.Error("report missing fan_in in medians")
 	}
-	if !strings.Contains(report, "Group 1:") || !strings.Contains(report, "Group 2:") {
-		t.Error("report does not show two cluster groups")
+	if !strings.Contains(report, "fan_out:") {
+		t.Error("report missing fan_out in medians")
+	}
+	// With 5 functions sorted: fan_in [0,0,0,1,2] median=0; fan_out [0,0,0,1,2] median=0
+	if !strings.Contains(report, "fan_in:0") {
+		t.Errorf("expected median fan_in:0 in report")
+	}
+	if !strings.Contains(report, "fan_out:0") {
+		t.Errorf("expected median fan_out:0 in report")
+	}
+	// Verify the function count
+	if !strings.Contains(report, "5 functions") {
+		t.Error("report should list 5 functions")
 	}
 }
 
-func TestDependencyCycles(t *testing.T) {
-	tests := []struct {
-		name       string
-		packages   []*Package
-		wantCycles int
-		wantInPath []string // at least one cycle should contain all of these
-	}{
-		{
-			name: "simple two-node cycle",
-			packages: []*Package{
-				{Path: "a", Imports: []string{"b"}},
-				{Path: "b", Imports: []string{"a"}},
-			},
-			wantCycles: 1,
-			wantInPath: []string{"a", "b"},
-		},
-		{
-			name: "three-node cycle",
-			packages: []*Package{
-				{Path: "a", Imports: []string{"b"}},
-				{Path: "b", Imports: []string{"c"}},
-				{Path: "c", Imports: []string{"a"}},
-			},
-			wantCycles: 1,
-			wantInPath: []string{"a", "b", "c"},
-		},
-		{
-			name: "no cycle",
-			packages: []*Package{
-				{Path: "a", Imports: []string{"b"}},
-				{Path: "b", Imports: []string{"c"}},
-				{Path: "c", Imports: nil},
-			},
-			wantCycles: 0,
-		},
-		{
-			name:       "empty graph",
-			packages:   nil,
-			wantCycles: 0,
-		},
-	}
+func TestCBOComputation(t *testing.T) {
+	// Create a type with enough external type references (> 5) to trigger the CBO threshold section.
+	source := `package main
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cycles := DetectCycles(tt.packages)
-			if len(cycles) != tt.wantCycles {
-				t.Errorf("expected %d cycles, got %d: %v", tt.wantCycles, len(cycles), cycles)
-			}
-			if tt.wantInPath != nil && len(cycles) > 0 {
-				cycle := cycles[0]
-				cycleSet := make(map[string]bool)
-				for _, p := range cycle {
-					cycleSet[p] = true
-				}
-				for _, want := range tt.wantInPath {
-					if !cycleSet[want] {
-						t.Errorf("expected %q in cycle, got %v", want, cycle)
-					}
-				}
-			}
-		})
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+)
+
+type BigService struct {
+	file   *os.File
+	w      io.Writer
+	reader *bufio.Reader
+	client *http.Client
+	sb     *strings.Builder
+}
+
+func (s *BigService) Print(f fmt.Stringer) {
+	fmt.Fprintln(s.w, f)
+}
+
+func (s *BigService) Open(name string) {
+	s.file, _ = os.Open(name)
+}
+
+func (s *BigService) Read() {
+	s.reader.ReadLine()
+}
+
+func (s *BigService) Do() {
+	s.client.Get("http://example.com")
+}
+
+func (s *BigService) Build() {
+	s.sb.WriteString("x")
+}
+`
+	dir := writeTempModule(t, "test/cbo", source)
+	report := runPipeline(t, dir)
+
+	// CBO > 5 triggers the threshold section
+	if !strings.Contains(report, "=== Coupling Between Objects") {
+		t.Error("report missing CBO threshold section — expected BigService to trigger CBO > 5")
+	}
+	if !strings.Contains(report, "BigService") {
+		t.Error("report CBO section should list BigService")
+	}
+	// The CBO value should appear in the listing
+	if !strings.Contains(report, "CBO:") {
+		t.Error("report CBO section should show CBO values")
+	}
+}
+
+func TestPackageMetrics(t *testing.T) {
+	// Package "a" imports "b". So b has Ca:1, a has Ce:1.
+	// b: I = 0/(1+0) = 0.00, a: I = 1/(0+1) = 1.00
+	files := map[string]string{
+		"a/a.go": `package a
+
+import "test/pkgmetrics/b"
+
+func UseB() string { return b.Hello() }
+`,
+		"b/b.go": `package b
+
+func Hello() string { return "hello" }
+`,
+	}
+	dir := writeTempMultiPackageModule(t, "test/pkgmetrics", files)
+	report := runPipeline(t, dir)
+
+	// The Packages listing should show both packages with correct coupling values
+	if !strings.Contains(report, "Ca:1") {
+		t.Error("report should show Ca:1 for package b")
+	}
+	if !strings.Contains(report, "Ce:1") {
+		t.Error("report should show Ce:1 for package a")
+	}
+	if !strings.Contains(report, "I:0.00") {
+		t.Error("report should show I:0.00 for package b (maximally stable)")
+	}
+	if !strings.Contains(report, "I:1.00") {
+		t.Error("report should show I:1.00 for package a (maximally volatile)")
+	}
+	// Both packages should be listed
+	if !strings.Contains(report, "2 packages") {
+		t.Error("report should list 2 packages")
+	}
+}
+
+func TestInterfaceCallsExcludedFromFanOut(t *testing.T) {
+	// UseGreeter only calls an interface method — fan_out should be 0.
+	// With only 1 function and fan_out:0, the median should be fan_out:0.
+	source := `package main
+
+type Greeter interface {
+	Greet() string
+}
+
+func UseGreeter(g Greeter) string {
+	return g.Greet()
+}
+`
+	dir := writeTempModule(t, "test/iface", source)
+	report := runPipeline(t, dir)
+
+	// The report should be produced successfully with 1 function
+	if !strings.Contains(report, "1 functions") {
+		t.Error("report should list 1 function")
+	}
+	// Median fan_out should be 0 (interface calls excluded)
+	if !strings.Contains(report, "fan_out:0") {
+		t.Error("expected median fan_out:0 — interface calls should not count as fan_out")
+	}
+}
+
+func TestGeneratedFilesExcluded(t *testing.T) {
+	// real.go has ~3 lines of function body, generated.go has ~3 lines but should be excluded.
+	// The report's line count should reflect only the non-generated file.
+	files := map[string]string{
+		"real.go": `package main
+
+func RealFunc() string { return "real" }
+`,
+		"generated.go": `// Code generated by tool; DO NOT EDIT.
+
+package main
+
+func GeneratedFunc() string { return "generated" }
+`,
+	}
+	dir := writeTempMultiPackageModule(t, "test/genfiles", files)
+	report := runPipeline(t, dir)
+
+	// The report should mention the module
+	if !strings.Contains(report, "test/genfiles") {
+		t.Error("report missing module path")
+	}
+	// Only RealFunc should be analyzed (1 function)
+	if !strings.Contains(report, "1 functions") {
+		t.Error("expected 1 function — generated file should be excluded")
+	}
+	// GeneratedFunc should NOT appear anywhere in the report
+	if strings.Contains(report, "GeneratedFunc") {
+		t.Error("GeneratedFunc should be excluded from report (generated file)")
 	}
 }
 
@@ -264,10 +430,9 @@ func TestSelfAnalysis(t *testing.T) {
 	functions := AnalyzeFunctions(pkgs, analyzedPaths)
 	types_ := AnalyzeTypes(pkgs, analyzedPaths)
 	module, packages := AnalyzePackages(pkgs, functions, types_, analyzedPaths)
-	cycles := DetectCycles(packages)
 
 	var buf bytes.Buffer
-	GenerateReport(&buf, module, packages, functions, types_, cycles)
+	GenerateReport(&buf, module, packages, functions, types_)
 	report := buf.String()
 
 	if len(report) == 0 {
@@ -290,8 +455,7 @@ func TestSelfAnalysis(t *testing.T) {
 	// At least one candidate section should appear (the tool has known cognitive complexity violations).
 	hasFinding := strings.Contains(report, "=== Cognitive Complexity") ||
 		strings.Contains(report, "=== Cohesion") ||
-		strings.Contains(report, "=== Coupling Between Objects") ||
-		strings.Contains(report, "=== Dependency Cycles")
+		strings.Contains(report, "=== Coupling Between Objects")
 	if !hasFinding {
 		t.Error("report contains no candidate sections")
 	}
