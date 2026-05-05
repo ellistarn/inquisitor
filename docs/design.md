@@ -6,8 +6,10 @@ defend the project — finding missing implementations, extra implementations, a
 by comparing where complexity IS against where designs say it SHOULD be.
 
 ```
-inquisitor ./path/to/packages/...
-inquisitor install # writes the skill to ~/.agents/skills/inquisition/SKILL.md
+inquisitor ./...
+inquisitor ../other-project/pkg
+inquisitor /absolute/path/to/module
+inquisitor install
 ```
 
 ## Reading the Report
