@@ -14,14 +14,14 @@ inquisitor install
 
 The report contains exactly these sections in this order: overview (module identity, glossary,
 medians, package listing), then metric sections (cohesion, cognitive complexity, CBO,
-architecture balance — in that order).
+architecture balance, tests — in that order).
 
 The report opens with module identity, a glossary defining every abbreviation with citations and
 action guidance, medians establishing what "normal" looks like, and a package listing:
 
 ```
 github.com/example/project
-  8 packages · 62 types · 296 functions · 11906 lines
+  8 packages · 62 types · 278 functions · 18 tests · 11906 lines
 
   Glossary:
     cog     cognitive complexity (Campbell 2018) — measures reader difficulty by penalizing
@@ -76,6 +76,7 @@ github.com/example/project
     package    Ce:1  18 exports  740 lines
     type       LCOM4:1  CBO:0  0 methods
     function   cog:3  cyc:4  fan_in:2  fan_out:4  14 lines
+    test       cog:3  14 lines
 
   Packages:
     github.com/example/project/pkg/controller    5596 lines (47%)  Ca:1  Ce:4  I:0.80
@@ -89,7 +90,9 @@ github.com/example/project
 
 After the overview, the report shows metric sections. Each section fires when it has values to
 report — sections with thresholds fire only when values exceed them, sections without thresholds
-always fire. All sections sort items by primary metric descending.
+always fire. Threshold sections and Architecture Balance sort items by primary metric descending.
+The Tests section groups by package (sorted by package path) with functions listed alphabetically
+within each package.
 
 | Section | Metric | Fires when | Citation |
 |---|---|---|---|
@@ -97,6 +100,7 @@ always fire. All sections sort items by primary metric descending.
 | Cognitive Complexity | cog | > 15 | Campbell, SonarSource, 2018 |
 | Coupling Between Objects | CBO | > 5 | Practitioner convention; Basili, Briand & Melo 1996 |
 | Architecture Balance | D | always | Martin, 2002 |
+| Tests | — | always | — |
 
 ```
 === Cognitive Complexity (Campbell 2018) ===
@@ -141,16 +145,38 @@ should be abstract, volatile packages should be concrete. D = 0 is ideal.
 No established threshold — evaluate against the designs.
 
   github.com/example/project/internal/util      D:1.00  A:0.00  I:0.00  (stable, concrete, zero interfaces)
-  github.com/example/project/pkg/controller     D:0.20  A:0.00  I:0.80  (volatile, concrete)
-  github.com/example/project/pkg/graph          D:0.33  A:0.00  I:0.67  (volatile, concrete)
-  github.com/example/project/pkg/api            D:0.50  A:0.00  I:0.50
   github.com/example/project/internal/config    D:0.67  A:0.00  I:0.33
+  github.com/example/project/pkg/api            D:0.50  A:0.00  I:0.50
+  github.com/example/project/pkg/graph          D:0.33  A:0.00  I:0.67  (volatile, concrete)
+  github.com/example/project/pkg/controller     D:0.20  A:0.00  I:0.80  (volatile, concrete)
+```
+
+```
+=== Tests ===
+All test functions, grouped by package.
+
+  github.com/example/project/pkg/controller
+    TestReconcileCreate()            cog:5   32 lines
+    TestReconcileUpdate()            cog:3   24 lines
+    TestReconcileDelete()            cog:4   28 lines
+
+  github.com/example/project/pkg/graph
+    TestBuildAcyclic()               cog:8   45 lines
+    TestCycleDetection()             cog:6   38 lines
+
+  github.com/example/project/pkg/api
+    TestHandleRequest()              cog:12  56 lines
+    TestValidateInput()              cog:3   18 lines
 ```
 
 ## Scope
 
 - **Default argument**: `./...` when no package patterns are given.
 - **Test files**: Included. Prefers in-package test variant (`package foo` over `package foo_test`).
+- **Test classification**: Functions named `Test*` in `_test.go` files. `Benchmark*` and `Fuzz*` are not classified as tests — they exercise the system with random or load-driven inputs that don't map to specific design concepts.
+- **Test count**: Tests are counted separately from functions in the overview.
+- **Tests section empty state**: When no test functions exist, the section still fires with the header and no entries.
+- **Threshold sections**: Test functions still appear in threshold sections (cog > 15, LCOM4 > 1, CBO > 5) alongside production code. A test with cog:40 is Excess regardless of where it's listed — the threshold section is the canonical place to surface Excess.
 - **Generated code**: Files with a `// Code generated` header are excluded.
 - **Output**: stdout.
 - **Parse errors**: If any package fails to load, the tool exits non-zero.
