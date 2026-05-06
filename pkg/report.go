@@ -13,6 +13,7 @@ func GenerateReport(w io.Writer, mod *Module, packages []*Package, functions []*
 	writeCognitiveThreshold(w, functions)
 	writeCBOThreshold(w, types_)
 	writeArchitectureBalance(w, packages)
+	writeTests(w, functions)
 }
 
 // ---------------------------------------------------------------------------
@@ -20,8 +21,17 @@ func GenerateReport(w io.Writer, mod *Module, packages []*Package, functions []*
 // ---------------------------------------------------------------------------
 
 func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*Function, types_ []*Type) {
+	// Count tests separately from functions
+	testCount := 0
+	for _, f := range functions {
+		if f.IsTest {
+			testCount++
+		}
+	}
+	funcCount := len(functions) - testCount
+
 	fmt.Fprintf(w, "%s\n", mod.Path)
-	fmt.Fprintf(w, "  %d packages · %d types · %d functions · %d lines\n", len(packages), len(types_), len(functions), mod.Lines)
+	fmt.Fprintf(w, "  %d packages · %d types · %d functions · %d tests · %d lines\n", len(packages), len(types_), funcCount, testCount, mod.Lines)
 
 	// Glossary
 	fmt.Fprintln(w)
@@ -118,6 +128,25 @@ func writeOverview(w io.Writer, mod *Module, packages []*Package, functions []*F
 			lines[i] = f.Lines
 		}
 		fmt.Fprintf(w, "    function   cog:%d  cyc:%d  fan_in:%d  fan_out:%d  %d lines\n", median(cogs), median(cycs), median(fanIns), median(fanOuts), median(lines))
+	}
+
+	// Test medians
+	{
+		var testFuncs []*Function
+		for _, f := range functions {
+			if f.IsTest {
+				testFuncs = append(testFuncs, f)
+			}
+		}
+		if len(testFuncs) > 0 {
+			cogs := make([]int, len(testFuncs))
+			lines := make([]int, len(testFuncs))
+			for i, f := range testFuncs {
+				cogs[i] = f.Cog
+				lines[i] = f.Lines
+			}
+			fmt.Fprintf(w, "    test       cog:%d  %d lines\n", median(cogs), median(lines))
+		}
 	}
 
 	// Package listing
@@ -355,6 +384,73 @@ func archDescription(p *Package) string {
 	}
 
 	return strings.Join(parts, ", ")
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+func writeTests(w io.Writer, functions []*Function) {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "=== Tests ===\n")
+	fmt.Fprintf(w, "All test functions, grouped by package.\n")
+
+	// Collect test functions
+	var tests []*Function
+	for _, f := range functions {
+		if f.IsTest {
+			tests = append(tests, f)
+		}
+	}
+	if len(tests) == 0 {
+		return
+	}
+
+	// Group by package, sorted by package path
+	byPkg := make(map[string][]*Function)
+	for _, f := range tests {
+		byPkg[f.Package] = append(byPkg[f.Package], f)
+	}
+	pkgPaths := make([]string, 0, len(byPkg))
+	for p := range byPkg {
+		pkgPaths = append(pkgPaths, p)
+	}
+	sort.Strings(pkgPaths)
+
+	// Sort functions alphabetically within each package
+	for _, p := range pkgPaths {
+		sort.Slice(byPkg[p], func(i, j int) bool {
+			return byPkg[p][i].Name < byPkg[p][j].Name
+		})
+	}
+
+	// Compute label width for alignment
+	type entry struct {
+		label string
+		f     *Function
+	}
+	var allEntries []entry
+	for _, p := range pkgPaths {
+		for _, f := range byPkg[p] {
+			allEntries = append(allEntries, entry{label: funcDisplayName(f), f: f})
+		}
+	}
+	labelWidth := 0
+	for _, e := range allEntries {
+		if len(e.label) > labelWidth {
+			labelWidth = len(e.label)
+		}
+	}
+
+	// Write grouped output
+	for _, p := range pkgPaths {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  %s\n", p)
+		for _, f := range byPkg[p] {
+			label := funcDisplayName(f)
+			fmt.Fprintf(w, "    %-*s  cog:%-4d %d lines\n", labelWidth, label, f.Cog, f.Lines)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

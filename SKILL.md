@@ -1,6 +1,6 @@
 ---
 name: inquisition
-description: Root out heresies against the design. The implementation is guilty until proven justified. Load when verifying a codebase against its designs.
+description: Root out heresies against the design. The implementation is guilty until proven sanctioned. Load when verifying a codebase against its designs.
 ---
 
 # The Inquisition
@@ -13,7 +13,7 @@ Four charges:
 1. **Absence** — the design mandates behavior the code doesn't implement or defend.
 2. **Heresy** — the code implements behavior the design doesn't sanction.
 3. **Schism** — the code implements the design under names the design doesn't use.
-4. **Excess** — the code implements the design but with unjustified complexity.
+4. **Excess** — the code implements the design but with unsanctioned complexity.
 
 It works through **Understand → Analyze → Judge → Remediate**: understand the designs, measure the code,
 bring charges, remediate them. Fix by severity, descending. Each iteration addresses one coherent
@@ -109,7 +109,7 @@ Mark undefended concepts as ABSENCE in the concept map's Status column. These ar
 
 **Structural roles.** The metrics reveal what role code plays in the architecture — stable foundation vs volatile leaf, coordinator vs calculator, focused type vs entangled god object. Compare the role the design describes against the role the metrics reveal. The tool's glossary explains what each metric signals about architectural role.
 
-**Proportionality.** Complexity is justified when proportional to what the design describes. Count the concepts the design names for a given function or type — the metric values should scale with that count. If they don't, the implementation exceeds its mandate.
+**Proportionality.** Complexity is sanctioned when proportional to what the design describes. Count the concepts the design names for a given function or type — the metric values should scale with that count. If they don't, the implementation exceeds its mandate.
 
 **Test excess.** The Tests section shows cog and lines for each test. A test with disproportionate complexity for the concept it defends is excess in the test itself. Tests should be simple proofs — if a test is harder to understand than the code it exercises, it needs simplification.
 
@@ -168,9 +168,9 @@ Four charges (one per item):
 - **EXCESS** — more complex than the design requires (in code or tests).
 
 Or acquitted:
-- **JUSTIFIED** — a specific design requirement demands this complexity. Cite it.
+- **SANCTIONED** — a specific design requirement demands this complexity. Cite it.
 
-Order: ABSENCE first, then HERESY, then SCHISM, then EXCESS, then JUSTIFIED.
+Order: ABSENCE first, then HERESY, then SCHISM, then EXCESS, then SANCTIONED.
 
 For large reports, audit the top 10 items per section. If patterns emerge (e.g., all cog violations are in one package), note the pattern rather than writing individual verdicts for each.
 
