@@ -132,7 +132,7 @@ Implies: split into separate types, one per group.
 Distinct types from other packages referenced through fields, parameters, return types,
 and method bodies. Measures how entangled a type is with its environment.
 Threshold: CBO > 5. Codebase median: 2.
-Implies: narrow interfaces or split responsibilities.
+Implies: reduce external type dependencies or split the type.
 
   github.com/example/project/pkg.RequestHandler           CBO:12  LCOM4:3  8 methods
   github.com/example/project/pkg.EventBus                 CBO:9   LCOM4:1  5 methods
