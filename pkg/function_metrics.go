@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -52,6 +53,11 @@ func computeFunctionMetrics(pkgs []*packages.Package) []fnResult {
 				f.File = filepath.Base(pos.Filename)
 				f.EndLine = pkg.Fset.Position(fd.End()).Line
 				f.Lines = f.EndLine - f.StartLine + 1
+
+				// Test classification: Test* in _test.go files
+				if strings.HasSuffix(f.File, "_test.go") && strings.HasPrefix(f.Name, "Test") {
+					f.IsTest = true
+				}
 
 			// Cognitive complexity
 			f.Cog = cognitiveComplexity(fd)

@@ -49,6 +49,7 @@ type Function struct {
 	File            string // base filename where function is declared
 	Receiver        string // empty for free functions
 	PointerReceiver bool
+	IsTest          bool // true if name starts with "Test" and file is _test.go
 	Cog             int
 	Cyc             int
 	FanIn           int

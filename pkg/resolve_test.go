@@ -3,6 +3,7 @@ package inquisitor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -77,49 +78,54 @@ func TestResolvePatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pats, root, err := resolvePatterns(tt.patterns)
+			assertError(t, err, tt.wantErr)
 			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
-				}
-				if !contains(err.Error(), tt.wantErr) {
-					t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
-				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tt.wantRoot != "" && root != tt.wantRoot {
-				t.Errorf("root = %q, want %q", root, tt.wantRoot)
-			}
-			if tt.wantPats != nil && !sliceEqual(pats, tt.wantPats) {
-				t.Errorf("patterns = %v, want %v", pats, tt.wantPats)
-			}
+			assertStringEqual(t, "root", root, tt.wantRoot)
+			assertSliceEqual(t, "patterns", pats, tt.wantPats)
 		})
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
+func assertError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if wantErr == "" {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("expected error containing %q, got nil", wantErr)
+	}
+	if !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("expected error containing %q, got %q", wantErr, err.Error())
+	}
 }
 
-func stringContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func assertStringEqual(t *testing.T, field, got, want string) {
+	t.Helper()
+	if want == "" {
+		return
 	}
-	return false
+	if got != want {
+		t.Errorf("%s = %q, want %q", field, got, want)
+	}
 }
 
-func sliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+func assertSliceEqual(t *testing.T, field string, got, want []string) {
+	t.Helper()
+	if want == nil {
+		return
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	if len(got) != len(want) {
+		t.Errorf("%s = %v, want %v", field, got, want)
+		return
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("%s[%d] = %q, want %q", field, i, got[i], want[i])
 		}
 	}
-	return true
 }
